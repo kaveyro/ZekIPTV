@@ -10,6 +10,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.media3.common.AudioAttributes
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
@@ -25,7 +27,17 @@ fun VideoPlayer(url: String, onBack: () -> Unit) {
     // ExoPlayer erkennt HLS (.m3u8), DASH, progressive Streams automatisch anhand der URL,
     // da die passenden Media3-Module (inkl. HLS) als Dependency eingebunden sind.
     val exoPlayer = remember {
-        ExoPlayer.Builder(context).build().apply {
+        ExoPlayer.Builder(context)
+            // Audio-Fokus anfordern + als Medien-Ton kennzeichnen: sorgt für korrekte
+            // Tonausgabe/Routing auf TV-Geräten und pausiert/duckt andere Audioquellen.
+            .setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(C.USAGE_MEDIA)
+                    .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
+                    .build(),
+                /* handleAudioFocus = */ true
+            )
+            .build().apply {
             setMediaItem(MediaItem.fromUri(url))
             prepare()
             playWhenReady = true
