@@ -1,6 +1,14 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+}
+
+// Signierdaten liegen gitignoriert in keystore/keystore.properties (nicht committen!).
+val keystoreProperties = Properties().apply {
+    val file = rootProject.file("keystore/keystore.properties")
+    if (file.exists()) file.inputStream().use { load(it) }
 }
 
 android {
@@ -20,6 +28,18 @@ android {
         }
     }
 
+    signingConfigs {
+        create("release") {
+            val storeName = keystoreProperties.getProperty("storeFile")
+            if (storeName != null) {
+                storeFile = rootProject.file("keystore/$storeName")
+                storePassword = keystoreProperties.getProperty("storePassword")
+                keyAlias = keystoreProperties.getProperty("keyAlias")
+                keyPassword = keystoreProperties.getProperty("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         release {
             // R8: kleineres, schnelleres APK — wichtig für die schwache Fire-TV-Hardware.
@@ -29,6 +49,7 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            signingConfig = signingConfigs.getByName("release")
         }
     }
     compileOptions {
