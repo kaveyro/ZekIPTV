@@ -1,0 +1,21 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#6650A4"
+        android:pathData="M0,0h108v108h-108z" />
+    <!-- Bildschirm -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M28,34h52a4,4 0 0 1 4,4v26a4,4 0 0 1 -4,4h-52a4,4 0 0 1 -4,-4v-26a4,4 0 0 1 4,-4z" />
+    <!-- Play-Symbol -->
+    <path
+        android:fillColor="#6650A4"
+        android:pathData="M48,44l16,7l-16,7z" />
+    <!-- Standfuß -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M44,74h20v4h-20z" />
+</vector>

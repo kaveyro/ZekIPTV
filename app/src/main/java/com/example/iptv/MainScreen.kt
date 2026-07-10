@@ -1,0 +1,288 @@
+package com.example.iptv
+
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.viewmodel.compose.viewModel
+import coil.compose.AsyncImage
+import androidx.compose.runtime.LaunchedEffect
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
+@Composable
+fun MainScreen(mainViewModel: MainViewModel = viewModel()) {
+    val url by mainViewModel.url
+    val search by mainViewModel.searchQuery
+    val uiState by mainViewModel.uiState
+    val channels by mainViewModel.visibleChannels
+    val groups by mainViewModel.groups
+    val selectedGroup by mainViewModel.selectedGroup
+    val favorites by mainViewModel.favorites
+
+    val hasChannels = channels.isNotEmpty() || groups.isNotEmpty()
+    var showSettings by remember { mutableStateOf(false) }
+
+    val listState = rememberLazyListState()
+    val listFocusRequester = remember { FocusRequester() }
+    val targetFocusIndex = mainViewModel.lastFocusedIndex.coerceIn(0, maxOf(0, channels.lastIndex))
+
+    // Anfangs- und Wiederherstellungs-Fokus: nach dem Laden (oder Rückkehr aus dem Player)
+    // steht der Fokus auf dem zuletzt gewählten Kanal, damit die Fernbedienung sofort greift.
+    LaunchedEffect(uiState, channels.size) {
+        if (uiState is PlaylistUiState.Success && channels.isNotEmpty()) {
+            listState.scrollToItem(targetFocusIndex)
+            runCatching { listFocusRequester.requestFocus() }
+        }
+    }
+
+    Column(modifier = Modifier.fillMaxSize().padding(24.dp)) {
+        // Kopfzeile: Suche + Einstellungen-Umschalter
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("IPTV", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.width(24.dp))
+            if (hasChannels) {
+                OutlinedTextField(
+                    value = search,
+                    onValueChange = mainViewModel::onSearchChange,
+                    label = { Text("Suche") },
+                    singleLine = true,
+                    modifier = Modifier.weight(1f)
+                )
+                Spacer(Modifier.width(16.dp))
+            } else {
+                Spacer(Modifier.weight(1f))
+            }
+            Button(onClick = { showSettings = !showSettings }) {
+                Text(if (showSettings) "Schließen" else "Playlist")
+            }
+        }
+
+        // Playlist-URL-Eingabe (nur einmal nötig – wird gespeichert).
+        if (showSettings || !hasChannels) {
+            Spacer(Modifier.height(16.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                OutlinedTextField(
+                    value = url,
+                    onValueChange = mainViewModel::onUrlChange,
+                    label = { Text("M3U Playlist URL") },
+                    singleLine = true,
+                    modifier = Modifier.weight(1f)
+                )
+                Spacer(Modifier.width(16.dp))
+                Button(onClick = {
+                    showSettings = false
+                    mainViewModel.loadPlaylist()
+                }) {
+                    Text("Laden")
+                }
+            }
+        }
+
+        // Gruppen-/Kategorie-Auswahl
+        if (groups.isNotEmpty()) {
+            Spacer(Modifier.height(16.dp))
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                item {
+                    GroupChip("Alle", selected = selectedGroup == null) {
+                        mainViewModel.selectGroup(null)
+                    }
+                }
+                items(groups) { group ->
+                    GroupChip(group, selected = selectedGroup == group) {
+                        mainViewModel.selectGroup(group)
+                    }
+                }
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
+
+        // Inhalt je nach Zustand
+        Box(modifier = Modifier.fillMaxSize()) {
+            when (val state = uiState) {
+                is PlaylistUiState.Loading -> {
+                    CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
+                }
+
+                is PlaylistUiState.Error -> {
+                    Text(
+                        text = state.message,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.align(Alignment.Center)
+                    )
+                }
+
+                else -> {
+                    if (channels.isEmpty()) {
+                        Text(
+                            text = if (hasChannels) "Keine Treffer." else "Playlist laden, um Kanäle zu sehen.",
+                            modifier = Modifier.align(Alignment.Center)
+                        )
+                    } else {
+                        LazyColumn(
+                            state = listState,
+                            modifier = Modifier.fillMaxSize(),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            // Kein URL-basierter Key: reale Playlists enthalten denselben Stream
+                            // mehrfach (in verschiedenen Gruppen); doppelte Keys würden die
+                            // LazyColumn crashen. Positionsbasierter Default-Key ist hier sicher.
+                            itemsIndexed(channels) { index, channel ->
+                                ChannelRow(
+                                    channel = channel,
+                                    isFavorite = channel.url in favorites,
+                                    modifier = if (index == targetFocusIndex) {
+                                        Modifier.focusRequester(listFocusRequester)
+                                    } else Modifier,
+                                    onClick = { mainViewModel.selectChannel(channel) },
+                                    onToggleFavorite = { mainViewModel.toggleFavorite(channel) }
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun ChannelRow(
+    channel: Channel,
+    isFavorite: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+    onToggleFavorite: () -> Unit
+) {
+    var focused by remember { mutableStateOf(false) }
+    val bg = if (focused) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant
+    val fg = if (focused) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
+
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .onFocusChanged { focused = it.isFocused }
+            // combinedClickable macht das Item D-Pad-fokussierbar; Center = öffnen, Lang = Favorit.
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = onToggleFavorite
+            )
+            .background(bg)
+            .border(
+                width = if (focused) 3.dp else 0.dp,
+                color = if (focused) MaterialTheme.colorScheme.onPrimary else Color.Transparent,
+                shape = RoundedCornerShape(12.dp)
+            )
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        if (channel.logo != null) {
+            AsyncImage(
+                model = channel.logo,
+                contentDescription = null,
+                modifier = Modifier.size(40.dp).clip(RoundedCornerShape(6.dp))
+            )
+            Spacer(Modifier.width(16.dp))
+        }
+        Text(
+            text = channel.name,
+            color = fg,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            style = MaterialTheme.typography.titleMedium,
+            modifier = Modifier.weight(1f)
+        )
+        if (isFavorite) {
+            Icon(
+                imageVector = Icons.Filled.Star,
+                contentDescription = "Favorit",
+                tint = fg
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun GroupChip(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    var focused by remember { mutableStateOf(false) }
+    val bg = when {
+        focused -> MaterialTheme.colorScheme.primary
+        selected -> MaterialTheme.colorScheme.secondaryContainer
+        else -> MaterialTheme.colorScheme.surfaceVariant
+    }
+    val fg = when {
+        focused -> MaterialTheme.colorScheme.onPrimary
+        selected -> MaterialTheme.colorScheme.onSecondaryContainer
+        else -> MaterialTheme.colorScheme.onSurface
+    }
+    Text(
+        text = label,
+        color = fg,
+        maxLines = 1,
+        modifier = Modifier
+            .clip(RoundedCornerShape(20.dp))
+            .onFocusChanged { focused = it.isFocused }
+            .combinedClickable(onClick = onClick)
+            .background(bg)
+            .border(
+                width = if (focused) 2.dp else 0.dp,
+                color = if (focused) MaterialTheme.colorScheme.onPrimary else Color.Transparent,
+                shape = RoundedCornerShape(20.dp)
+            )
+            .padding(horizontal = 18.dp, vertical = 10.dp)
+    )
+}
