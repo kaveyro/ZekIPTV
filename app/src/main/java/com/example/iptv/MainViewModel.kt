@@ -10,6 +10,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.IOException
+import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URL
 
@@ -38,6 +40,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     // Fokus-Index, damit nach Rückkehr aus dem Player der zuletzt gewählte Kanal fokussiert bleibt.
     var lastFocusedIndex: Int = 0
+
+    // Nur wenn true stellt MainScreen den Listen-Fokus her (Erstladung / Rückkehr aus dem Player).
+    // Bewusst KEINE Refokussierung bei Such-/Gruppenänderungen, sonst wird der Fokus beim
+    // Tippen aus dem Suchfeld gestohlen.
+    val pendingListFocus = mutableStateOf(false)
 
     /** Gruppen für die Kategorie-Auswahl: "★ Favoriten" (falls vorhanden) + group-title-Werte. */
     val groups: State<List<String>> = derivedStateOf {
@@ -71,6 +78,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             if (saved.isNotEmpty()) {
                 allChannels.value = saved
                 uiState.value = PlaylistUiState.Success
+                pendingListFocus.value = true
             }
         }
         // Favoriten laufend beobachten.
@@ -101,11 +109,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             val result = withContext(Dispatchers.IO) {
                 runCatching {
-                    val connection = (URL(target).openConnection() as HttpURLConnection).apply {
-                        connectTimeout = 15_000
-                        readTimeout = 15_000
-                    }
-                    connection.inputStream.use { M3uParser().parse(it) }
+                    openStream(target).use { M3uParser().parse(it) }
                 }
             }
             result.fold(
@@ -117,6 +121,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         selectedGroup.value = null
                         searchQuery.value = ""
                         uiState.value = PlaylistUiState.Success
+                        pendingListFocus.value = true
                         repository.saveUrl(target)
                         repository.saveChannels(channels)
                     }
@@ -135,13 +140,57 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun deselectChannel() {
         selectedChannel.value = null
+        pendingListFocus.value = true
+    }
+
+    /** Zappt vom aktuellen Sender aus um [delta] weiter (+1 = nächster, -1 = vorheriger). */
+    fun zapChannel(delta: Int) {
+        val list = visibleChannels.value
+        if (list.isEmpty()) return
+        val current = selectedChannel.value
+        val currentIndex = list.indexOf(current).takeIf { it >= 0 }
+            ?: lastFocusedIndex.coerceIn(0, list.lastIndex)
+        val next = list[(currentIndex + delta).mod(list.size)]
+        selectChannel(next)
     }
 
     fun toggleFavorite(channel: Channel) {
         viewModelScope.launch { repository.toggleFavorite(channel.url) }
     }
 
+    /**
+     * Öffnet die Playlist-URL mit explizitem User-Agent (manche Anbieter blocken den
+     * Java-Default) und folgt Redirects auch über Protokollwechsel hinweg
+     * (HttpURLConnection folgt http→https nicht automatisch).
+     */
+    private fun openStream(url: String): InputStream {
+        var current = url
+        repeat(MAX_REDIRECTS) {
+            val connection = (URL(current).openConnection() as HttpURLConnection).apply {
+                connectTimeout = 15_000
+                readTimeout = 15_000
+                instanceFollowRedirects = true
+                setRequestProperty("User-Agent", "IPTV/1.0 (Android TV)")
+            }
+            when (val code = connection.responseCode) {
+                in 200..299 -> return connection.inputStream
+                in 300..399 -> {
+                    val location = connection.getHeaderField("Location")
+                        ?: throw IOException("Weiterleitung ohne Ziel (HTTP $code)")
+                    connection.disconnect()
+                    current = URL(URL(current), location).toString()
+                }
+                else -> {
+                    connection.disconnect()
+                    throw IOException("HTTP $code")
+                }
+            }
+        }
+        throw IOException("Zu viele Weiterleitungen")
+    }
+
     companion object {
         const val FAVORITES_GROUP = "★ Favoriten"
+        private const val MAX_REDIRECTS = 5
     }
 }

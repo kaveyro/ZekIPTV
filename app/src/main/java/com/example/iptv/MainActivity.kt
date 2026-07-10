@@ -30,9 +30,14 @@ class MainActivity : ComponentActivity() {
 fun IptvApp(mainViewModel: MainViewModel = viewModel()) {
     val selectedChannel by mainViewModel.selectedChannel
 
-    if (selectedChannel == null) {
+    val channel = selectedChannel
+    if (channel == null) {
         MainScreen(mainViewModel)
     } else {
-        VideoPlayer(url = selectedChannel!!.url, onBack = { mainViewModel.deselectChannel() })
+        VideoPlayer(
+            channel = channel,
+            onBack = { mainViewModel.deselectChannel() },
+            onZap = { delta -> mainViewModel.zapChannel(delta) }
+        )
     }
 }

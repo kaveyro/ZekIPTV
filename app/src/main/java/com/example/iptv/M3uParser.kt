@@ -20,8 +20,12 @@ class M3uParser {
                     val attrs = attrRegex.findAll(line)
                         .associate { it.groupValues[1].lowercase() to it.groupValues[2] }
 
-                    // Anzeigename: Text nach dem letzten Komma, sonst tvg-name.
-                    val displayName = line.substringAfterLast(",", "").trim()
+                    // Anzeigename: Text nach dem ersten Komma HINTER dem letzten Attribut.
+                    // Nicht substringAfterLast: Kanalnamen dürfen selbst Kommas enthalten
+                    // ("Sky Sport, HD" würde sonst zu "HD").
+                    val lastQuote = line.lastIndexOf('"')
+                    val nameComma = line.indexOf(',', startIndex = maxOf(lastQuote, 0))
+                    val displayName = if (nameComma >= 0) line.substring(nameComma + 1).trim() else ""
                     pendingName = displayName.ifEmpty { null }
                         ?: attrs["tvg-name"]?.ifEmpty { null }
                         ?: "Unbenannt"

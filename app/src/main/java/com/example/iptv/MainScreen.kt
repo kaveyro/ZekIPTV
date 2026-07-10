@@ -1,5 +1,6 @@
 package com.example.iptv
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -38,10 +39,17 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -63,17 +71,38 @@ fun MainScreen(mainViewModel: MainViewModel = viewModel()) {
     val hasChannels = channels.isNotEmpty() || groups.isNotEmpty()
     var showSettings by remember { mutableStateOf(false) }
 
+    val focusManager = LocalFocusManager.current
+    // Compose-Textfelder konsumieren DPAD-Tasten für die Cursor-Steuerung und werden so
+    // zur Fokus-Falle für die Fernbedienung. DPAD_DOWN reicht den Fokus explizit weiter.
+    val escapeDownOnDpad = Modifier.onPreviewKeyEvent { event ->
+        if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionDown) {
+            focusManager.moveFocus(FocusDirection.Down)
+            true
+        } else {
+            false
+        }
+    }
+
     val listState = rememberLazyListState()
     val listFocusRequester = remember { FocusRequester() }
     val targetFocusIndex = mainViewModel.lastFocusedIndex.coerceIn(0, maxOf(0, channels.lastIndex))
+    val pendingListFocus by mainViewModel.pendingListFocus
 
-    // Anfangs- und Wiederherstellungs-Fokus: nach dem Laden (oder Rückkehr aus dem Player)
-    // steht der Fokus auf dem zuletzt gewählten Kanal, damit die Fernbedienung sofort greift.
-    LaunchedEffect(uiState, channels.size) {
-        if (uiState is PlaylistUiState.Success && channels.isNotEmpty()) {
+    // Fokus-Wiederherstellung NUR bei Erstladung oder Rückkehr aus dem Player (explizites Flag).
+    // Nicht an channels.size koppeln — sonst wird beim Tippen in der Suche oder beim
+    // Gruppenwechsel der Fokus aus dem gerade bedienten Element gestohlen.
+    LaunchedEffect(pendingListFocus, channels.size) {
+        if (pendingListFocus && channels.isNotEmpty()) {
             listState.scrollToItem(targetFocusIndex)
             runCatching { listFocusRequester.requestFocus() }
+            mainViewModel.pendingListFocus.value = false
         }
+    }
+
+    // BACK setzt erst Filter zurück (Suche/Gruppe), statt die App sofort zu beenden.
+    BackHandler(enabled = selectedGroup != null || search.isNotEmpty()) {
+        mainViewModel.onSearchChange("")
+        mainViewModel.selectGroup(null)
     }
 
     Column(modifier = Modifier.fillMaxSize().padding(24.dp)) {
@@ -90,7 +119,7 @@ fun MainScreen(mainViewModel: MainViewModel = viewModel()) {
                     onValueChange = mainViewModel::onSearchChange,
                     label = { Text("Suche") },
                     singleLine = true,
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier.weight(1f).then(escapeDownOnDpad)
                 )
                 Spacer(Modifier.width(16.dp))
             } else {
@@ -113,7 +142,7 @@ fun MainScreen(mainViewModel: MainViewModel = viewModel()) {
                     onValueChange = mainViewModel::onUrlChange,
                     label = { Text("M3U Playlist URL") },
                     singleLine = true,
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier.weight(1f).then(escapeDownOnDpad)
                 )
                 Spacer(Modifier.width(16.dp))
                 Button(onClick = {

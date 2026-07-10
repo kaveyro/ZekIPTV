@@ -22,7 +22,9 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            // R8: kleineres, schnelleres APK — wichtig für die schwache Fire-TV-Hardware.
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -60,7 +62,8 @@ dependencies {
     implementation("androidx.compose.ui:ui-graphics")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
-    implementation("androidx.compose.material:material-icons-extended")
+    // Kein material-icons-extended: der einzige genutzte Icon (Star) ist im Core-Set
+    // enthalten (transitiv über material3) — spart mehrere MB.
 
     // Media3 / ExoPlayer inkl. HLS für .m3u8-Streams
     implementation("androidx.media3:media3-exoplayer:1.3.1")

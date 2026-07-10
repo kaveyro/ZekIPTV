@@ -7,7 +7,9 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import org.json.JSONArray
 import org.json.JSONObject
@@ -30,7 +32,7 @@ class PlaylistRepository(private val context: Context) {
 
     val channelsFlow: Flow<List<Channel>> = context.dataStore.data.map { prefs ->
         prefs[Keys.CHANNELS]?.let(::decodeChannels) ?: emptyList()
-    }
+    }.flowOn(Dispatchers.Default) // JSON-Decode großer Playlists nicht auf dem Main-Thread
 
     val favoritesFlow: Flow<Set<String>> = context.dataStore.data.map { it[Keys.FAVORITES] ?: emptySet() }
 
