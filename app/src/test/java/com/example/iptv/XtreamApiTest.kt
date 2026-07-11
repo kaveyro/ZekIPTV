@@ -68,6 +68,33 @@ class XtreamApiTest {
     }
 
     @Test
+    fun `parses vod info details`() {
+        val json = """{
+            "info": {"plot":"Ein Film über Dinge.","genre":"Drama","releasedate":"2024-03-01",
+                     "rating":"7.3","duration":"01:52:00","director":"Jane Doe","cast":"A, B"},
+            "movie_data": {"stream_id":42}
+        }"""
+        val api = XtreamApi(account) { json }
+        val info = api.getVodInfo(42)
+        assertEquals("Ein Film über Dinge.", info.plot)
+        assertEquals("Drama", info.genre)
+        assertEquals("2024-03-01", info.releaseDate)
+        assertEquals("7.3", info.rating)
+        assertEquals("Jane Doe", info.director)
+    }
+
+    @Test
+    fun `parses series metadata`() {
+        val json = """[{"series_id":9,"name":"Serie","cover":"http://x/c.jpg","category_id":"3",
+            "plot":"Spannend.","genre":"Krimi","releaseDate":"2020-01-01","rating":"8"}]"""
+        val api = XtreamApi(account) { json }
+        val series = api.getSeries().first()
+        assertEquals("Spannend.", series.plot)
+        assertEquals("Krimi", series.genre)
+        assertEquals("8", series.rating)
+    }
+
+    @Test
     fun `builds stream urls`() {
         val api = XtreamApi(account) { "" }
         assertEquals(

@@ -16,6 +16,8 @@ import com.example.iptv.ui.theme.IptvTheme
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Playlist/EPG alle 12 h im Hintergrund aktualisieren.
+        RefreshWorker.schedule(applicationContext)
         setContent {
             val mainViewModel: MainViewModel = viewModel()
             val themeMode by mainViewModel.themeMode
@@ -37,6 +39,7 @@ class MainActivity : ComponentActivity() {
 fun IptvApp(mainViewModel: MainViewModel = viewModel()) {
     val selectedChannel by mainViewModel.selectedChannel
     val vodMedia by mainViewModel.playingMedia
+    val selectedVod by mainViewModel.selectedVod
     val selectedSeries by mainViewModel.selectedSeries
     val showSettings by mainViewModel.showSettings
 
@@ -54,9 +57,14 @@ fun IptvApp(mainViewModel: MainViewModel = viewModel()) {
             onZap = if (media.isLive) {
                 { delta -> mainViewModel.zapChannel(delta) }
             } else null,
+            onSwapLast = if (media.isLive) {
+                { mainViewModel.swapToPreviousChannel() }
+            } else null,
             onCycleSleep = { mainViewModel.cycleSleepTimer() },
             onSaveResume = { url, position -> mainViewModel.saveResume(url, position) }
         )
+
+        selectedVod != null -> VodDetailScreen(mainViewModel)
 
         selectedSeries != null -> EpisodesScreen(mainViewModel)
 

@@ -9,6 +9,7 @@ import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
@@ -166,6 +167,44 @@ class PlaylistRepository(private val context: Context) {
         buildMap { obj.keys().forEach { put(it, obj.getLong(it)) } }
     } catch (e: Exception) {
         emptyMap()
+    }
+
+    // ---------- Backup (Playlists, Favoriten, EPG-Quellen, Einstellungen) ----------
+
+    private val backupFile: File
+        get() = File(context.getExternalFilesDir(null), "zekiptv-backup.json")
+
+    /** Schreibt alle Einstellungen als JSON-Datei; gibt den Pfad zurück. */
+    suspend fun exportBackup(): String = withContext(Dispatchers.IO) {
+        val prefs = context.dataStore.data.first()
+        val root = JSONObject().apply {
+            put("url", prefs[Keys.URL] ?: "")
+            put("playlists", prefs[Keys.PLAYLISTS] ?: "[]")
+            put("favorites", JSONArray((prefs[Keys.FAVORITES] ?: emptySet()).toList()))
+            put("epgSources", JSONArray((prefs[Keys.EPG_SOURCES] ?: emptySet()).toList()))
+            put("theme", prefs[Keys.THEME] ?: "dark")
+            put("autoplay", prefs[Keys.AUTOPLAY] ?: "false")
+        }
+        backupFile.writeText(root.toString(2))
+        backupFile.absolutePath
+    }
+
+    /** Liest die Backup-Datei und übernimmt alle Einstellungen; gibt den Pfad zurück. */
+    suspend fun importBackup(): String = withContext(Dispatchers.IO) {
+        val root = JSONObject(backupFile.readText())
+        fun jsonToSet(name: String): Set<String> {
+            val array = root.optJSONArray(name) ?: JSONArray()
+            return buildSet { for (i in 0 until array.length()) add(array.getString(i)) }
+        }
+        context.dataStore.edit { prefs ->
+            prefs[Keys.URL] = root.optString("url")
+            prefs[Keys.PLAYLISTS] = root.optString("playlists", "[]")
+            prefs[Keys.FAVORITES] = jsonToSet("favorites")
+            prefs[Keys.EPG_SOURCES] = jsonToSet("epgSources")
+            prefs[Keys.THEME] = root.optString("theme", "dark")
+            prefs[Keys.AUTOPLAY] = root.optString("autoplay", "false")
+        }
+        backupFile.absolutePath
     }
 
     private fun encodePlaylists(playlists: List<PlaylistEntry>): String {

@@ -60,12 +60,14 @@ fun VideoPlayer(
     sleepMinutes: Int?,
     onBack: () -> Unit,
     onZap: ((Int) -> Unit)?,
+    onSwapLast: (() -> Unit)?,
     onCycleSleep: () -> Unit,
     onSaveResume: (String, Long) -> Unit
 ) {
     val context = LocalContext.current
     // Immer die aktuellen Referenzen verwenden (factory/Listener laufen nur einmal).
     val currentOnZap by rememberUpdatedState(onZap)
+    val currentOnSwapLast by rememberUpdatedState(onSwapLast)
     val currentMedia by rememberUpdatedState(media)
     val currentOnSaveResume by rememberUpdatedState(onSaveResume)
 
@@ -210,6 +212,15 @@ fun VideoPlayer(
                             }
                             return true // auch ACTION_UP konsumieren, sonst zeigt PlayerView die Leiste
                         }
+                        // Sender-Rücksprung ("letzter Sender"): LINKS bei ausgeblendeter
+                        // Steuerleiste. Mit sichtbarer Leiste navigiert LINKS die Leiste.
+                        val swap = currentOnSwapLast
+                        if (swap != null && !isControllerFullyVisible &&
+                            event.keyCode == KeyEvent.KEYCODE_DPAD_LEFT
+                        ) {
+                            if (event.action == KeyEvent.ACTION_DOWN) swap()
+                            return true
+                        }
                         return super.dispatchKeyEvent(event)
                     }
                 }.apply {
@@ -314,8 +325,9 @@ private fun PlayerMenuDialog(
     onCycleSleep: () -> Unit,
     onDismiss: () -> Unit
 ) {
-    // Tonspuren beim Öffnen einlesen.
+    // Ton- und Untertitelspuren beim Öffnen einlesen.
     val audioGroups = remember { exoPlayer.currentTracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO } }
+    val textGroups = remember { exoPlayer.currentTracks.groups.filter { it.type == C.TRACK_TYPE_TEXT } }
 
     Dialog(onDismissRequest = onDismiss) {
         Surface(
@@ -360,6 +372,41 @@ private fun PlayerMenuDialog(
                             onClick = {
                                 exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters
                                     .buildUpon()
+                                    .setOverrideForType(TrackSelectionOverride(group.mediaTrackGroup, 0))
+                                    .build()
+                                onDismiss()
+                            }
+                        )
+                    }
+                }
+
+                if (textGroups.isNotEmpty()) {
+                    Text(
+                        "Untertitel",
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.padding(top = 16.dp, bottom = 8.dp)
+                    )
+                    MenuRow(
+                        label = "Aus",
+                        onClick = {
+                            exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters
+                                .buildUpon()
+                                .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+                                .build()
+                            onDismiss()
+                        }
+                    )
+                    textGroups.forEachIndexed { index, group ->
+                        val format = group.getTrackFormat(0)
+                        val label = format.label
+                            ?: format.language?.uppercase()
+                            ?: "Untertitel ${index + 1}"
+                        MenuRow(
+                            label = (if (group.isSelected) "✓ " else "") + label,
+                            onClick = {
+                                exoPlayer.trackSelectionParameters = exoPlayer.trackSelectionParameters
+                                    .buildUpon()
+                                    .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
                                     .setOverrideForType(TrackSelectionOverride(group.mediaTrackGroup, 0))
                                     .build()
                                 onDismiss()

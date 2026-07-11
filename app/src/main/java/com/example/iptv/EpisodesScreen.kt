@@ -71,6 +71,32 @@ fun EpisodesScreen(mainViewModel: MainViewModel) {
             Button(onClick = { mainViewModel.closeSeries() }) { Text("Zurück") }
         }
 
+        // Metadaten + Beschreibung der Serie (aus dem Anbieter-Katalog)
+        val meta = listOfNotNull(
+            series?.releaseDate?.take(4),
+            series?.genre,
+            series?.rating?.let { "★ $it" }
+        ).joinToString("  ·  ")
+        if (meta.isNotEmpty()) {
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = meta,
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+            )
+        }
+        val plot = series?.plot
+        if (plot != null) {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = plot,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.75f),
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+
         Spacer(Modifier.height(16.dp))
 
         Box(modifier = Modifier.fillMaxSize()) {

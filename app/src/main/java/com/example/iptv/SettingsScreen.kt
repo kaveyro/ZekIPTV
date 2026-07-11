@@ -173,7 +173,28 @@ fun SettingsScreen(mainViewModel: MainViewModel) {
         }
         item {
             Text(
-                "Tipp: Im Player öffnet die MENÜ-Taste Tonspur-Auswahl und Sleep-Timer.",
+                "Tipp: Im Player öffnet die MENÜ-Taste Tonspur-, Untertitel- und Sleep-Timer-Auswahl. " +
+                    "LINKS springt zum zuletzt gesehenen Sender.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+            )
+        }
+
+        // ---------- Backup ----------
+        item { SectionTitle("Backup") }
+        item {
+            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                Button(onClick = { mainViewModel.exportBackup() }) { Text("Backup exportieren") }
+                Button(onClick = { mainViewModel.importBackup() }) { Text("Backup importieren") }
+            }
+        }
+        item {
+            val backupInfo by mainViewModel.backupInfo
+            Text(
+                backupInfo.ifEmpty {
+                    "Sichert Playlists, Favoriten, EPG-Quellen und Einstellungen als JSON-Datei " +
+                        "im App-Ordner (per Dateimanager/adb übertragbar)."
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
             )

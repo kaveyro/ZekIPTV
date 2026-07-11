@@ -17,12 +17,27 @@ data class VodItem(
     val ext: String
 )
 
-/** Eine Serie aus dem Katalog des Anbieters. */
+/** Eine Serie aus dem Katalog des Anbieters (inkl. Metadaten für die Detail-Ansicht). */
 data class SeriesItem(
     val id: Int,
     val name: String,
     val cover: String?,
-    val categoryId: String?
+    val categoryId: String?,
+    val plot: String? = null,
+    val genre: String? = null,
+    val releaseDate: String? = null,
+    val rating: String? = null
+)
+
+/** Detail-Metadaten eines Films (get_vod_info). */
+data class VodInfo(
+    val plot: String?,
+    val genre: String?,
+    val releaseDate: String?,
+    val rating: String?,
+    val duration: String?,
+    val director: String?,
+    val cast: String?
 )
 
 /** Eine einzelne Serien-Episode. */
@@ -116,11 +131,31 @@ class XtreamApi(
                         id = id,
                         name = name,
                         cover = obj.optString("cover").ifEmpty { null },
-                        categoryId = obj.optString("category_id").ifEmpty { null }
+                        categoryId = obj.optString("category_id").ifEmpty { null },
+                        plot = obj.optString("plot").ifEmpty { null },
+                        genre = obj.optString("genre").ifEmpty { null },
+                        releaseDate = obj.optString("releaseDate").ifEmpty { null },
+                        rating = obj.optString("rating").ifEmpty { null }?.takeIf { it != "0" }
                     )
                 )
             }
         }
+    }
+
+    /** Detail-Metadaten eines Films (Plot, Jahr, Bewertung, …). */
+    fun getVodInfo(vodId: Int): VodInfo {
+        val obj = JSONObject(fetchText(apiUrl("get_vod_info", "&vod_id=$vodId")))
+        val info = obj.optJSONObject("info") ?: JSONObject()
+        fun field(name: String): String? = info.optString(name).ifEmpty { null }?.takeIf { it != "null" }
+        return VodInfo(
+            plot = field("plot") ?: field("description"),
+            genre = field("genre"),
+            releaseDate = field("releasedate") ?: field("release_date"),
+            rating = field("rating")?.takeIf { it != "0" },
+            duration = field("duration"),
+            director = field("director"),
+            cast = field("cast") ?: field("actors")
+        )
     }
 
     /** Alle Episoden einer Serie, sortiert nach Staffel und Episodennummer. */

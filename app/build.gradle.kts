@@ -19,8 +19,8 @@ android {
         applicationId = "com.example.iptv"
         minSdk = 24
         targetSdk = 34
-        versionCode = 3
-        versionName = "1.2"
+        versionCode = 4
+        versionName = "1.3"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -93,6 +93,9 @@ dependencies {
 
     // Persistenz (URL, Kanäle, Favoriten)
     implementation("androidx.datastore:datastore-preferences:1.1.1")
+
+    // Periodischer Hintergrund-Refresh von Playlist/EPG
+    implementation("androidx.work:work-runtime-ktx:2.9.1")
 
     // Kanal-Logos
     implementation("io.coil-kt:coil-compose:2.7.0")

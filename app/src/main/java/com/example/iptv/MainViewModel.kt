@@ -62,6 +62,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val seriesEpisodes = mutableStateOf<List<SeriesEpisode>>(emptyList())
     val contentInfo = mutableStateOf("") // Lade-/Fehlerstatus für Filme/Serien
 
+    // VOD-Detail-Seite
+    val selectedVod = mutableStateOf<VodItem?>(null)
+    val vodInfo = mutableStateOf<VodInfo?>(null)
+
+    // Programmführer (Tagesprogramm eines Senders)
+    val epgChannel = mutableStateOf<Channel?>(null)
+
+    // Sender-Rücksprung ("letzter Sender")
+    private var previousChannel: Channel? = null
+
+    // Backup-Status für die Einstellungen
+    val backupInfo = mutableStateOf("")
+
     // Wiedergabe (VOD/Episoden; Live läuft über selectedChannel)
     val playingMedia = mutableStateOf<PlayingMedia?>(null)
     val resumePositions = mutableStateOf<Map<String, Long>>(emptyMap())
@@ -109,24 +122,48 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             .toList()
     }
 
-    /** Nach Kategorie und Suchbegriff gefilterte Filme. */
+    /** Nach Kategorie gefilterte Filme (FAV_CATEGORY = nur Favoriten). */
     val visibleVod: State<List<VodItem>> = derivedStateOf {
         val category = selectedVodCategory.value
-        val query = searchQuery.value.trim()
-        vodItems.value.asSequence()
-            .filter { category == null || it.categoryId == category }
-            .filter { query.isEmpty() || it.name.contains(query, ignoreCase = true) }
-            .toList()
+        vodItems.value.filter { item ->
+            when (category) {
+                null -> true
+                FAV_CATEGORY -> vodFavKey(item) in favorites.value
+                else -> item.categoryId == category
+            }
+        }
     }
 
-    /** Nach Kategorie und Suchbegriff gefilterte Serien. */
+    /** Nach Kategorie gefilterte Serien (FAV_CATEGORY = nur Favoriten). */
     val visibleSeries: State<List<SeriesItem>> = derivedStateOf {
         val category = selectedSeriesCategory.value
+        seriesItems.value.filter { item ->
+            when (category) {
+                null -> true
+                FAV_CATEGORY -> seriesFavKey(item) in favorites.value
+                else -> item.categoryId == category
+            }
+        }
+    }
+
+    // ---------- Globale Suche (über Live + Filme + Serien, ignoriert Kategorien) ----------
+
+    val searchChannels: State<List<Channel>> = derivedStateOf {
         val query = searchQuery.value.trim()
-        seriesItems.value.asSequence()
-            .filter { category == null || it.categoryId == category }
-            .filter { query.isEmpty() || it.name.contains(query, ignoreCase = true) }
-            .toList()
+        if (query.isEmpty()) emptyList()
+        else allChannels.value.filter { it.name.contains(query, ignoreCase = true) }.take(50)
+    }
+
+    val searchVod: State<List<VodItem>> = derivedStateOf {
+        val query = searchQuery.value.trim()
+        if (query.isEmpty()) emptyList()
+        else vodItems.value.filter { it.name.contains(query, ignoreCase = true) }.take(50)
+    }
+
+    val searchSeries: State<List<SeriesItem>> = derivedStateOf {
+        val query = searchQuery.value.trim()
+        if (query.isEmpty()) emptyList()
+        else seriesItems.value.filter { it.name.contains(query, ignoreCase = true) }.take(50)
     }
 
     init {
@@ -191,6 +228,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun onSearchChange(value: String) {
         searchQuery.value = value
+        // Globale Suche braucht die Filme-/Serien-Kataloge — bei Bedarf nachladen.
+        if (value.isNotBlank() && xtream != null) {
+            if (vodItems.value.isEmpty()) loadVod()
+            if (seriesItems.value.isEmpty()) loadSeries()
+        }
     }
 
     fun selectGroup(group: String?) {
@@ -270,6 +312,20 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun selectSeriesCategory(categoryId: String?) {
         selectedSeriesCategory.value = categoryId
+    }
+
+    fun openVod(item: VodItem) {
+        selectedVod.value = item
+        vodInfo.value = null
+        val api = xtream ?: return
+        viewModelScope.launch {
+            runCatching { withContext(Dispatchers.IO) { api.getVodInfo(item.id) } }
+                .onSuccess { vodInfo.value = it }
+        }
+    }
+
+    fun closeVod() {
+        selectedVod.value = null
     }
 
     fun openSeries(series: SeriesItem) {
@@ -397,36 +453,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             epgInfo.value = "Zuerst eine Playlist laden."
             return
         }
-        // Matching über tvg-id UND normalisierte Sendernamen (viele Anbieter nutzen Hash-IDs).
-        val wantedIds = channels.mapNotNull { it.tvgId?.lowercase()?.ifEmpty { null } }.toSet()
-        val wantedNames = channels.map { normalizeChannelName(it.name) }.filterTo(HashSet()) { it.isNotEmpty() }
         epgInfo.value = "EPG wird geladen…"
         viewModelScope.launch {
-            val (result, failed) = withContext(Dispatchers.IO) {
-                val accProgrammes = HashMap<String, MutableList<EpgProgramme>>()
-                val accNameToId = HashMap<String, String>()
-                var failures = 0
-                for (source in sources) {
-                    runCatching {
-                        Http.maybeGunzip(Http.openStream(source)).use { input ->
-                            val parsed = XmltvParser().parse(input, wantedIds, wantedNames)
-                            parsed.programmes.forEach { (id, programmes) ->
-                                accProgrammes.getOrPut(id) { mutableListOf() }.addAll(programmes)
-                            }
-                            parsed.nameToId.forEach { (name, id) -> accNameToId.putIfAbsent(name, id) }
-                        }
-                    }.onFailure { failures++ }
-                }
-                (accProgrammes to accNameToId) to failures
-            }
-            epgData = result.first
-            epgNameToId = result.second
+            val result = withContext(Dispatchers.IO) { EpgFetcher.fetch(channels, sources) }
+            epgData = result.programmes
+            epgNameToId = result.nameToId
             epgTick.value = System.currentTimeMillis()
-            repository.saveEpgCache(result.first, result.second)
-            val programmeCount = result.first.values.sumOf { it.size }
+            repository.saveEpgCache(result.programmes, result.nameToId)
+            val programmeCount = result.programmes.values.sumOf { it.size }
             epgInfo.value = buildString {
-                append("EPG: $programmeCount Sendungen für ${result.first.size} Sender geladen.")
-                if (failed > 0) append(" $failed Quelle(n) fehlgeschlagen.")
+                append("EPG: $programmeCount Sendungen für ${result.programmes.size} Sender geladen.")
+                if (result.failedSources > 0) append(" ${result.failedSources} Quelle(n) fehlgeschlagen.")
             }
         }
     }
@@ -496,8 +533,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun selectChannel(channel: Channel) {
         lastFocusedIndex = visibleChannels.value.indexOf(channel).coerceAtLeast(0)
+        // Für den Sender-Rücksprung den bisher laufenden Sender merken.
+        selectedChannel.value?.takeIf { it.url != channel.url }?.let { previousChannel = it }
         selectedChannel.value = channel
         viewModelScope.launch { repository.saveLastChannel(channel.url) }
+    }
+
+    /** Springt zum zuvor gesehenen Sender zurück (klassische "letzter Sender"-Taste). */
+    fun swapToPreviousChannel() {
+        previousChannel?.let(::selectChannel)
     }
 
     fun deselectChannel() {
@@ -520,8 +564,70 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { repository.toggleFavorite(channel.url) }
     }
 
+    // ---------- Favoriten für Filme/Serien (gleicher Favoriten-Speicher, eigene Keys) ----------
+
+    fun vodFavKey(item: VodItem): String = vodUrl(item) ?: "vod:${item.id}"
+
+    fun seriesFavKey(item: SeriesItem): String = "series:${item.id}"
+
+    fun toggleVodFavorite(item: VodItem) {
+        viewModelScope.launch { repository.toggleFavorite(vodFavKey(item)) }
+    }
+
+    fun toggleSeriesFavorite(item: SeriesItem) {
+        viewModelScope.launch { repository.toggleFavorite(seriesFavKey(item)) }
+    }
+
+    // ---------- Programmführer ----------
+
+    fun openEpgFor(channel: Channel) {
+        epgChannel.value = channel
+    }
+
+    fun closeEpg() {
+        epgChannel.value = null
+    }
+
+    /** Alle geladenen Sendungen eines Senders (für die Tagesprogramm-Ansicht). */
+    fun programmesFor(channel: Channel): List<EpgProgramme> {
+        val id = channel.tvgId?.lowercase()?.takeIf { it in epgData }
+            ?: epgNameToId[normalizeChannelName(channel.name)]
+            ?: return emptyList()
+        return epgData[id] ?: emptyList()
+    }
+
+    // ---------- Backup ----------
+
+    fun exportBackup() {
+        viewModelScope.launch {
+            runCatching { repository.exportBackup() }.fold(
+                onSuccess = { backupInfo.value = "Backup gespeichert: $it" },
+                onFailure = { backupInfo.value = "Backup fehlgeschlagen: ${it.message}" }
+            )
+        }
+    }
+
+    fun importBackup() {
+        viewModelScope.launch {
+            runCatching { repository.importBackup() }.fold(
+                onSuccess = {
+                    // Zustände neu einlesen und Playlist mit den importierten Daten laden.
+                    url.value = repository.urlFlow.first()
+                    themeMode.value = repository.themeFlow.first()
+                    epgSources.value = repository.epgSourcesFlow.first()
+                    autoplayLast.value = repository.autoplayFlow.first()
+                    playlists.value = repository.playlistsFlow.first()
+                    backupInfo.value = "Backup importiert — Playlist wird geladen…"
+                    if (url.value.isNotBlank()) loadPlaylist()
+                },
+                onFailure = { backupInfo.value = "Import fehlgeschlagen: ${it.message}" }
+            )
+        }
+    }
+
     companion object {
         const val FAVORITES_GROUP = "★ Favoriten"
+        const val FAV_CATEGORY = "__favoriten__" // Pseudo-Kategorie für Filme/Serien
         private const val EPG_CACHE_MAX_AGE_MS = 12L * 60 * 60 * 1000 // 12 h
         private val EMPTY_EPG = EpgNowNext(null, null, null)
     }
