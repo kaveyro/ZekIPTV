@@ -12,6 +12,7 @@ class M3uParser {
         var pendingName: String? = null
         var pendingLogo: String? = null
         var pendingGroup: String? = null
+        var pendingTvgId: String? = null
 
         inputStream.bufferedReader().forEachLine { rawLine ->
             val line = rawLine.trim()
@@ -31,6 +32,7 @@ class M3uParser {
                         ?: "Unbenannt"
                     pendingLogo = attrs["tvg-logo"]?.ifEmpty { null }
                     pendingGroup = attrs["group-title"]?.ifEmpty { null }
+                    pendingTvgId = attrs["tvg-id"]?.ifEmpty { null }
                 }
 
                 line.isEmpty() || line.startsWith("#") -> {
@@ -46,13 +48,15 @@ class M3uParser {
                                 name = name,
                                 url = line,
                                 logo = pendingLogo,
-                                group = pendingGroup
+                                group = pendingGroup,
+                                tvgId = pendingTvgId
                             )
                         )
                     }
                     pendingName = null
                     pendingLogo = null
                     pendingGroup = null
+                    pendingTvgId = null
                 }
             }
         }

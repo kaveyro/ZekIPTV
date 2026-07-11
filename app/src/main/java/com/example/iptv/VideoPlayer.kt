@@ -6,6 +6,7 @@ import androidx.activity.compose.BackHandler
 import androidx.annotation.OptIn
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -43,6 +44,7 @@ import kotlinx.coroutines.delay
 @Composable
 fun VideoPlayer(
     channel: Channel,
+    nowPlaying: String?,
     onBack: () -> Unit,
     onZap: (Int) -> Unit
 ) {
@@ -135,6 +137,9 @@ fun VideoPlayer(
                 }.apply {
                     player = exoPlayer
                     useController = true            // D-Pad-freundliche Standard-Transportleiste
+                    // Steuerleiste NICHT automatisch einblenden: sonst schluckt sie nach dem
+                    // ersten Zap alle DPAD-Tasten und weiteres Zappen ist ~5 s blockiert.
+                    controllerAutoShow = false
                     keepScreenOn = true             // Bildschirm bleibt während der Wiedergabe an
                     setShowNextButton(false)
                     setShowPreviousButton(false)
@@ -145,17 +150,27 @@ fun VideoPlayer(
         )
 
         if (overlayVisible) {
-            Text(
-                text = channel.name,
-                color = Color.White,
-                style = MaterialTheme.typography.headlineSmall,
+            Column(
                 modifier = Modifier
                     .align(Alignment.TopStart)
                     .padding(32.dp)
                     .clip(RoundedCornerShape(8.dp))
                     .background(Color.Black.copy(alpha = 0.6f))
                     .padding(horizontal = 20.dp, vertical = 10.dp)
-            )
+            ) {
+                Text(
+                    text = channel.name,
+                    color = Color.White,
+                    style = MaterialTheme.typography.headlineSmall
+                )
+                if (nowPlaying != null) {
+                    Text(
+                        text = "Jetzt: $nowPlaying",
+                        color = Color.White.copy(alpha = 0.8f),
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                }
+            }
         }
     }
 }

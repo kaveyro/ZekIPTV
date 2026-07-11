@@ -69,7 +69,6 @@ fun MainScreen(mainViewModel: MainViewModel = viewModel()) {
     val favorites by mainViewModel.favorites
 
     val hasChannels = channels.isNotEmpty() || groups.isNotEmpty()
-    var showSettings by remember { mutableStateOf(false) }
 
     val focusManager = LocalFocusManager.current
     // Compose-Textfelder konsumieren DPAD-Tasten für die Cursor-Steuerung und werden so
@@ -125,32 +124,8 @@ fun MainScreen(mainViewModel: MainViewModel = viewModel()) {
             } else {
                 Spacer(Modifier.weight(1f))
             }
-            Button(onClick = { showSettings = !showSettings }) {
-                Text(if (showSettings) "Schließen" else "Playlist")
-            }
-        }
-
-        // Playlist-URL-Eingabe (nur einmal nötig – wird gespeichert).
-        if (showSettings || !hasChannels) {
-            Spacer(Modifier.height(16.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                OutlinedTextField(
-                    value = url,
-                    onValueChange = mainViewModel::onUrlChange,
-                    label = { Text("M3U Playlist URL") },
-                    singleLine = true,
-                    modifier = Modifier.weight(1f).then(escapeDownOnDpad)
-                )
-                Spacer(Modifier.width(16.dp))
-                Button(onClick = {
-                    showSettings = false
-                    mainViewModel.loadPlaylist()
-                }) {
-                    Text("Laden")
-                }
+            Button(onClick = { mainViewModel.showSettings.value = true }) {
+                Text("Einstellungen")
             }
         }
 
@@ -191,7 +166,7 @@ fun MainScreen(mainViewModel: MainViewModel = viewModel()) {
                 else -> {
                     if (channels.isEmpty()) {
                         Text(
-                            text = if (hasChannels) "Keine Treffer." else "Playlist laden, um Kanäle zu sehen.",
+                            text = if (hasChannels) "Keine Treffer." else "In den Einstellungen (oben rechts) eine Playlist hinzufügen.",
                             modifier = Modifier.align(Alignment.Center)
                         )
                     } else {
@@ -207,6 +182,7 @@ fun MainScreen(mainViewModel: MainViewModel = viewModel()) {
                                 ChannelRow(
                                     channel = channel,
                                     isFavorite = channel.url in favorites,
+                                    nowPlaying = mainViewModel.nowPlayingFor(channel),
                                     modifier = if (index == targetFocusIndex) {
                                         Modifier.focusRequester(listFocusRequester)
                                     } else Modifier,
@@ -227,6 +203,7 @@ fun MainScreen(mainViewModel: MainViewModel = viewModel()) {
 private fun ChannelRow(
     channel: Channel,
     isFavorite: Boolean,
+    nowPlaying: String?,
     modifier: Modifier = Modifier,
     onClick: () -> Unit,
     onToggleFavorite: () -> Unit
@@ -262,14 +239,25 @@ private fun ChannelRow(
             )
             Spacer(Modifier.width(16.dp))
         }
-        Text(
-            text = channel.name,
-            color = fg,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            style = MaterialTheme.typography.titleMedium,
-            modifier = Modifier.weight(1f)
-        )
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = channel.name,
+                color = fg,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.titleMedium
+            )
+            if (nowPlaying != null) {
+                // "Jetzt läuft" aus dem EPG (Zuordnung über tvg-id)
+                Text(
+                    text = "Jetzt: $nowPlaying",
+                    color = fg.copy(alpha = 0.7f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+        }
         if (isFavorite) {
             Icon(
                 imageVector = Icons.Filled.Star,
@@ -282,7 +270,7 @@ private fun ChannelRow(
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun GroupChip(
+internal fun GroupChip(
     label: String,
     selected: Boolean,
     onClick: () -> Unit

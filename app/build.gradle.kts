@@ -19,8 +19,8 @@ android {
         applicationId = "com.example.iptv"
         minSdk = 24
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -98,6 +98,10 @@ dependencies {
     implementation("io.coil-kt:coil-compose:2.7.0")
 
     testImplementation("junit:junit:4.13.2")
+    // XmlPullParser-Implementierung für JVM-Unit-Tests des XMLTV-Parsers
+    // (auf dem Gerät liefert die Android-Plattform kXML).
+    testImplementation("net.sf.kxml:kxml2:2.3.0")
+    testImplementation("xmlpull:xmlpull:1.1.3.1")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
     androidTestImplementation(platform("androidx.compose:compose-bom:2024.09.00"))

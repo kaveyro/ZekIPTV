@@ -3,6 +3,7 @@ package com.example.iptv
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -16,10 +17,16 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            // Auf dem TV soll die Oberfläche unabhängig von der Systemeinstellung dunkel sein.
-            IptvTheme(darkTheme = true, dynamicColor = false) {
+            val mainViewModel: MainViewModel = viewModel()
+            val themeMode by mainViewModel.themeMode
+            val darkTheme = when (themeMode) {
+                "light" -> false
+                "system" -> isSystemInDarkTheme()
+                else -> true // "dark" ist der TV-Standard
+            }
+            IptvTheme(darkTheme = darkTheme, dynamicColor = false) {
                 Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-                    IptvApp()
+                    IptvApp(mainViewModel)
                 }
             }
         }
@@ -29,15 +36,19 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun IptvApp(mainViewModel: MainViewModel = viewModel()) {
     val selectedChannel by mainViewModel.selectedChannel
+    val showSettings by mainViewModel.showSettings
 
     val channel = selectedChannel
-    if (channel == null) {
-        MainScreen(mainViewModel)
-    } else {
-        VideoPlayer(
+    when {
+        channel != null -> VideoPlayer(
             channel = channel,
+            nowPlaying = mainViewModel.nowPlayingFor(channel),
             onBack = { mainViewModel.deselectChannel() },
             onZap = { delta -> mainViewModel.zapChannel(delta) }
         )
+
+        showSettings -> SettingsScreen(mainViewModel)
+
+        else -> MainScreen(mainViewModel)
     }
 }
