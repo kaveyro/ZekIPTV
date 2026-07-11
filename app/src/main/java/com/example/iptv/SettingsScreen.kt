@@ -158,6 +158,27 @@ fun SettingsScreen(mainViewModel: MainViewModel) {
             }
         }
 
+        // ---------- Wiedergabe ----------
+        item { SectionTitle("Wiedergabe") }
+        item {
+            val autoplay by mainViewModel.autoplayLast
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Letzten Sender beim Start abspielen:", style = MaterialTheme.typography.bodyMedium)
+                GroupChip("An", selected = autoplay) { mainViewModel.setAutoplayLast(true) }
+                GroupChip("Aus", selected = !autoplay) { mainViewModel.setAutoplayLast(false) }
+            }
+        }
+        item {
+            Text(
+                "Tipp: Im Player öffnet die MENÜ-Taste Tonspur-Auswahl und Sleep-Timer.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+            )
+        }
+
         // ---------- EPG ----------
         item { SectionTitle("EPG-Quellen (XMLTV)") }
         items(epgSources.toList(), key = { it }) { source ->

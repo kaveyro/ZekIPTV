@@ -19,8 +19,8 @@ android {
         applicationId = "com.example.iptv"
         minSdk = 24
         targetSdk = 34
-        versionCode = 2
-        versionName = "1.1"
+        versionCode = 3
+        versionName = "1.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -102,6 +102,8 @@ dependencies {
     // (auf dem Gerät liefert die Android-Plattform kXML).
     testImplementation("net.sf.kxml:kxml2:2.3.0")
     testImplementation("xmlpull:xmlpull:1.1.3.1")
+    // Echte org.json-Implementierung für JVM-Unit-Tests (android.jar enthält nur Stubs).
+    testImplementation("org.json:json:20240303")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
     androidTestImplementation(platform("androidx.compose:compose-bom:2024.09.00"))

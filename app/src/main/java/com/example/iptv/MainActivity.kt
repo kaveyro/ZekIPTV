@@ -36,16 +36,29 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun IptvApp(mainViewModel: MainViewModel = viewModel()) {
     val selectedChannel by mainViewModel.selectedChannel
+    val vodMedia by mainViewModel.playingMedia
+    val selectedSeries by mainViewModel.selectedSeries
     val showSettings by mainViewModel.showSettings
 
+    // Live-Sender oder VOD/Episode — beides läuft im selben Player.
     val channel = selectedChannel
+    val media = vodMedia ?: channel?.let { PlayingMedia(it.url, it.name, isLive = true) }
+
     when {
-        channel != null -> VideoPlayer(
-            channel = channel,
-            nowPlaying = mainViewModel.nowPlayingFor(channel),
-            onBack = { mainViewModel.deselectChannel() },
-            onZap = { delta -> mainViewModel.zapChannel(delta) }
+        media != null -> VideoPlayer(
+            media = media,
+            nowPlaying = if (media.isLive) channel?.let { mainViewModel.epgFor(it).now } else null,
+            resumeMs = mainViewModel.resumeFor(media.url),
+            sleepMinutes = mainViewModel.sleepTimerMinutes.value,
+            onBack = { mainViewModel.stopPlayback() },
+            onZap = if (media.isLive) {
+                { delta -> mainViewModel.zapChannel(delta) }
+            } else null,
+            onCycleSleep = { mainViewModel.cycleSleepTimer() },
+            onSaveResume = { url, position -> mainViewModel.saveResume(url, position) }
         )
+
+        selectedSeries != null -> EpisodesScreen(mainViewModel)
 
         showSettings -> SettingsScreen(mainViewModel)
 

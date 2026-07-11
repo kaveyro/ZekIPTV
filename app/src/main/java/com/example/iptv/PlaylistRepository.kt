@@ -11,8 +11,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "iptv_prefs")
 
@@ -33,6 +35,9 @@ class PlaylistRepository(private val context: Context) {
         val PLAYLISTS = stringPreferencesKey("playlists_json")
         val THEME = stringPreferencesKey("theme_mode") // dark | light | system
         val EPG_SOURCES = stringSetPreferencesKey("epg_sources")
+        val AUTOPLAY = stringPreferencesKey("autoplay_last") // "true"/"false"
+        val LAST_CHANNEL = stringPreferencesKey("last_channel_url")
+        val RESUME = stringPreferencesKey("resume_positions_json") // {url: positionMs}
     }
 
     val urlFlow: Flow<String> = context.dataStore.data.map { it[Keys.URL] ?: "" }
@@ -50,6 +55,14 @@ class PlaylistRepository(private val context: Context) {
     val themeFlow: Flow<String> = context.dataStore.data.map { it[Keys.THEME] ?: "dark" }
 
     val epgSourcesFlow: Flow<Set<String>> = context.dataStore.data.map { it[Keys.EPG_SOURCES] ?: emptySet() }
+
+    val autoplayFlow: Flow<Boolean> = context.dataStore.data.map { it[Keys.AUTOPLAY] == "true" }
+
+    val lastChannelFlow: Flow<String> = context.dataStore.data.map { it[Keys.LAST_CHANNEL] ?: "" }
+
+    val resumePositionsFlow: Flow<Map<String, Long>> = context.dataStore.data.map { prefs ->
+        prefs[Keys.RESUME]?.let(::decodeResume) ?: emptyMap()
+    }
 
     suspend fun saveUrl(url: String) {
         context.dataStore.edit { it[Keys.URL] = url }
@@ -76,6 +89,83 @@ class PlaylistRepository(private val context: Context) {
 
     suspend fun saveEpgSources(sources: Set<String>) {
         context.dataStore.edit { it[Keys.EPG_SOURCES] = sources }
+    }
+
+    suspend fun saveAutoplay(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.AUTOPLAY] = enabled.toString() }
+    }
+
+    suspend fun saveLastChannel(url: String) {
+        context.dataStore.edit { it[Keys.LAST_CHANNEL] = url }
+    }
+
+    /** Speichert die Wiedergabeposition eines VOD-Titels (0 = zurücksetzen/fertig gesehen). */
+    suspend fun saveResumePosition(url: String, positionMs: Long) {
+        context.dataStore.edit { prefs ->
+            val current = prefs[Keys.RESUME]?.let(::decodeResume)?.toMutableMap() ?: mutableMapOf()
+            if (positionMs > 0) current[url] = positionMs else current.remove(url)
+            prefs[Keys.RESUME] = JSONObject(current as Map<*, *>).toString()
+        }
+    }
+
+    // ---------- EPG-Cache (Datei, damit kein Download bei jedem Start nötig ist) ----------
+
+    private val epgCacheFile: File get() = File(context.filesDir, "epg_cache.json")
+
+    suspend fun saveEpgCache(
+        programmes: Map<String, List<EpgProgramme>>,
+        nameToId: Map<String, String>
+    ) = withContext(Dispatchers.IO) {
+        runCatching {
+            val root = JSONObject()
+            root.put("ts", System.currentTimeMillis())
+            root.put("nameToId", JSONObject(nameToId as Map<*, *>))
+            val progs = JSONObject()
+            programmes.forEach { (id, list) ->
+                val array = JSONArray()
+                list.forEach { p ->
+                    array.put(JSONArray().put(p.startMs).put(p.stopMs).put(p.title))
+                }
+                progs.put(id, array)
+            }
+            root.put("programmes", progs)
+            epgCacheFile.writeText(root.toString())
+        }
+    }
+
+    /** Lädt den EPG-Cache, falls vorhanden und jünger als [maxAgeMs]; sonst null. */
+    suspend fun loadEpgCache(
+        maxAgeMs: Long
+    ): Pair<Map<String, List<EpgProgramme>>, Map<String, String>>? = withContext(Dispatchers.IO) {
+        runCatching {
+            if (!epgCacheFile.exists()) return@runCatching null
+            val root = JSONObject(epgCacheFile.readText())
+            if (System.currentTimeMillis() - root.optLong("ts") > maxAgeMs) return@runCatching null
+            val nameToId = buildMap {
+                val obj = root.optJSONObject("nameToId") ?: JSONObject()
+                obj.keys().forEach { put(it, obj.getString(it)) }
+            }
+            val programmes = buildMap<String, List<EpgProgramme>> {
+                val obj = root.optJSONObject("programmes") ?: JSONObject()
+                obj.keys().forEach { id ->
+                    val array = obj.getJSONArray(id)
+                    put(id, buildList {
+                        for (i in 0 until array.length()) {
+                            val p = array.getJSONArray(i)
+                            add(EpgProgramme(id, p.getLong(0), p.getLong(1), p.getString(2)))
+                        }
+                    })
+                }
+            }
+            programmes to nameToId
+        }.getOrNull()
+    }
+
+    private fun decodeResume(json: String): Map<String, Long> = try {
+        val obj = JSONObject(json)
+        buildMap { obj.keys().forEach { put(it, obj.getLong(it)) } }
+    } catch (e: Exception) {
+        emptyMap()
     }
 
     private fun encodePlaylists(playlists: List<PlaylistEntry>): String {
