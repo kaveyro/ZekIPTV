@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Fallback für API < 26 (dort greift mipmap-anydpi-v26 nicht): Alias auf das Vektor-Icon. -->
+<inset xmlns:android="http://schemas.android.com/apk/res/android"
+    android:drawable="@drawable/ic_launcher" />
