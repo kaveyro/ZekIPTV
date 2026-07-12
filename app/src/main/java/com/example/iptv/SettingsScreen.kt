@@ -67,11 +67,16 @@ fun SettingsScreen(mainViewModel: MainViewModel) {
     var newEpgUrl by remember { mutableStateOf("") }
 
     val focusManager = LocalFocusManager.current
-    // Textfelder konsumieren DPAD-Tasten; DOWN reicht den Fokus explizit weiter (siehe MainScreen).
-    val escapeDownOnDpad = Modifier.onPreviewKeyEvent { event ->
-        if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionDown) {
-            focusManager.moveFocus(FocusDirection.Down)
-            true
+    // Textfelder verschlucken DPAD hoch/runter für die Cursor-Steuerung und werden so zur
+    // Fokus-Falle. Hoch/runter reichen den Fokus deshalb explizit an das nächste/vorherige
+    // Element weiter; links/rechts bleiben für die Cursor-Bewegung im Feld.
+    val escapeVerticalOnDpad = Modifier.onPreviewKeyEvent { event ->
+        if (event.type == KeyEventType.KeyDown) {
+            when (event.key) {
+                Key.DirectionDown -> { focusManager.moveFocus(FocusDirection.Down); true }
+                Key.DirectionUp -> { focusManager.moveFocus(FocusDirection.Up); true }
+                else -> false
+            }
         } else {
             false
         }
@@ -119,24 +124,25 @@ fun SettingsScreen(mainViewModel: MainViewModel) {
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
             )
         }
+        // Felder untereinander (statt nebeneinander): so führt hoch/runter sauber
+        // durch Name → URL → Button, ohne dass links/rechts nötig ist.
         item {
-            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                OutlinedTextField(
-                    value = newName,
-                    onValueChange = { newName = it },
-                    label = { Text("Name") },
-                    singleLine = true,
-                    modifier = Modifier.weight(0.35f).then(escapeDownOnDpad)
-                )
-                Spacer(Modifier.width(16.dp))
-                OutlinedTextField(
-                    value = newUrl,
-                    onValueChange = { newUrl = it },
-                    label = { Text("M3U-URL") },
-                    singleLine = true,
-                    modifier = Modifier.weight(0.65f).then(escapeDownOnDpad)
-                )
-            }
+            OutlinedTextField(
+                value = newName,
+                onValueChange = { newName = it },
+                label = { Text("Name") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth().then(escapeVerticalOnDpad)
+            )
+        }
+        item {
+            OutlinedTextField(
+                value = newUrl,
+                onValueChange = { newUrl = it },
+                label = { Text("M3U-URL") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth().then(escapeVerticalOnDpad)
+            )
         }
         item {
             Button(
@@ -173,8 +179,8 @@ fun SettingsScreen(mainViewModel: MainViewModel) {
         }
         item {
             Text(
-                "Tipp: Im Player öffnet die MENÜ-Taste Tonspur-, Untertitel- und Sleep-Timer-Auswahl. " +
-                    "LINKS springt zum zuletzt gesehenen Sender.",
+                "Tipp: Im Player öffnet die MENÜ-Taste (☰) Senderwechsel, Tonspur, Untertitel und " +
+                    "Sleep-Timer. OK zeigt die Steuerleiste (Pause/Vor-/Zurückspulen).",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
             )
@@ -231,25 +237,24 @@ fun SettingsScreen(mainViewModel: MainViewModel) {
             }
         }
         item {
-            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                OutlinedTextField(
-                    value = newEpgUrl,
-                    onValueChange = { newEpgUrl = it },
-                    label = { Text("Eigene XMLTV-URL (.xml oder .xml.gz)") },
-                    singleLine = true,
-                    modifier = Modifier.weight(1f).then(escapeDownOnDpad)
-                )
-                Spacer(Modifier.width(16.dp))
+            OutlinedTextField(
+                value = newEpgUrl,
+                onValueChange = { newEpgUrl = it },
+                label = { Text("Eigene XMLTV-URL (.xml oder .xml.gz)") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth().then(escapeVerticalOnDpad)
+            )
+        }
+        item {
+            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                 Button(
                     onClick = {
                         mainViewModel.addEpgSource(newEpgUrl)
                         newEpgUrl = ""
                     }
                 ) { Text("Hinzufügen") }
+                Button(onClick = { mainViewModel.refreshEpg() }) { Text("EPG aktualisieren") }
             }
-        }
-        item {
-            Button(onClick = { mainViewModel.refreshEpg() }) { Text("EPG aktualisieren") }
         }
         if (epgInfo.isNotEmpty()) {
             item {

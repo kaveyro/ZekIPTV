@@ -190,55 +190,47 @@ fun VideoPlayer(
                 // Transportleiste nicht sichtbar ist), MENÜ öffnet das Wiedergabe-Menü.
                 object : PlayerView(ctx) {
                     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-                        val zap = currentOnZap
-                        val isZapKey = event.keyCode == KeyEvent.KEYCODE_DPAD_UP ||
-                            event.keyCode == KeyEvent.KEYCODE_DPAD_DOWN ||
-                            event.keyCode == KeyEvent.KEYCODE_CHANNEL_UP ||
-                            event.keyCode == KeyEvent.KEYCODE_CHANNEL_DOWN
-                        if (event.action == KeyEvent.ACTION_DOWN && event.keyCode == KeyEvent.KEYCODE_MENU) {
-                            showMenu = true
-                            return true
-                        }
-                        // Wie am klassischen Fernseher: bei Live-TV zappt hoch/runter IMMER —
-                        // sonst schluckt die (auch unabsichtlich eingeblendete) Steuerleiste die
-                        // Tasten und Zappen wirkt unzuverlässig. Die Steuerleiste wird mit OK
-                        // geöffnet und mit links/rechts bedient.
-                        if (zap != null && isZapKey) {
-                            if (event.action == KeyEvent.ACTION_DOWN) {
-                                when (event.keyCode) {
-                                    KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_CHANNEL_UP -> zap(+1)
-                                    else -> zap(-1)
+                        // NUR die MENÜ-Taste (und ggf. physische Kanaltasten) abfangen.
+                        // ALLE DPAD-Tasten gehen bewusst an die Standard-Steuerleiste, damit
+                        // OK = Pause/Steuerleiste, Pfeile = navigieren usw. zuverlässig bleiben.
+                        // (Zappen/Rücksprung laufen konfliktfrei über das MENÜ.)
+                        if (event.action == KeyEvent.ACTION_DOWN) {
+                            when (event.keyCode) {
+                                KeyEvent.KEYCODE_MENU -> {
+                                    showMenu = true
+                                    return true
+                                }
+                                KeyEvent.KEYCODE_CHANNEL_UP -> {
+                                    currentOnZap?.let { it(+1); return true }
+                                }
+                                KeyEvent.KEYCODE_CHANNEL_DOWN -> {
+                                    currentOnZap?.let { it(-1); return true }
                                 }
                             }
-                            return true // auch ACTION_UP konsumieren, sonst zeigt PlayerView die Leiste
-                        }
-                        // Sender-Rücksprung ("letzter Sender"): LINKS bei ausgeblendeter
-                        // Steuerleiste. Mit sichtbarer Leiste navigiert LINKS die Leiste.
-                        val swap = currentOnSwapLast
-                        if (swap != null && !isControllerFullyVisible &&
-                            event.keyCode == KeyEvent.KEYCODE_DPAD_LEFT
-                        ) {
-                            if (event.action == KeyEvent.ACTION_DOWN) swap()
-                            return true
                         }
                         return super.dispatchKeyEvent(event)
                     }
                 }.apply {
                     player = exoPlayer
                     useController = true            // D-Pad-freundliche Standard-Transportleiste
-                    // Steuerleiste NICHT automatisch einblenden: sonst schluckt sie nach dem
-                    // ersten Zap alle DPAD-Tasten und weiteres Zappen ist ~5 s blockiert.
+                    // Steuerleiste nicht automatisch einblenden — sie erscheint auf OK/Pfeil.
                     controllerAutoShow = false
                     keepScreenOn = true             // Bildschirm bleibt während der Wiedergabe an
                     setShowNextButton(false)
                     setShowPreviousButton(false)
                     setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING) // Spinner beim Start/Zappen
                     setBackgroundColor(android.graphics.Color.BLACK)
-                    // PlayerView ist standardmäßig nicht fokussierbar: ohne Fokus kommen
-                    // Fernbedienungs-Tasten (Zapping/MENÜ) nach dem Ausblenden der
-                    // Steuerleiste nicht mehr an. Explizit fokussierbar machen.
+                    // Fokussierbar, damit MENÜ/Kanaltasten ankommen und die Steuerleiste reagiert.
                     isFocusable = true
                     isFocusableInTouchMode = true
+                    // Wenn die Steuerleiste ausgeblendet wird, wandert der Fokus sonst ins Leere
+                    // (die Controller-Buttons verschwinden) — dann käme MENÜ nicht mehr an.
+                    // Fokus deshalb zurück auf die PlayerView holen.
+                    setControllerVisibilityListener(
+                        PlayerView.ControllerVisibilityListener { visibility ->
+                            if (visibility != android.view.View.VISIBLE) requestFocus()
+                        }
+                    )
                     playerViewRef = this
                     requestFocus()
                 }
@@ -295,10 +287,12 @@ fun VideoPlayer(
             PlayerMenuDialog(
                 exoPlayer = exoPlayer,
                 sleepMinutes = sleepMinutes,
+                onZap = currentOnZap,
+                onSwapLast = currentOnSwapLast,
                 onCycleSleep = onCycleSleep,
                 onDismiss = {
                     showMenu = false
-                    // Fokus zurück zur PlayerView, damit Zapping/MENÜ weiter funktionieren.
+                    // Fokus zurück zur PlayerView, damit MENÜ/Steuerleiste weiter reagieren.
                     playerViewRef?.requestFocus()
                 }
             )
@@ -322,6 +316,8 @@ private fun saveVodPosition(player: ExoPlayer, media: PlayingMedia, save: (Strin
 private fun PlayerMenuDialog(
     exoPlayer: ExoPlayer,
     sleepMinutes: Int?,
+    onZap: ((Int) -> Unit)?,
+    onSwapLast: (() -> Unit)?,
     onCycleSleep: () -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -340,6 +336,15 @@ private fun PlayerMenuDialog(
                     style = MaterialTheme.typography.titleLarge,
                     modifier = Modifier.padding(bottom = 12.dp)
                 )
+
+                // Senderwechsel (nur Live) — konfliktfrei per Menü statt DPAD.
+                if (onZap != null) {
+                    MenuRow(label = "▲ Nächster Sender", onClick = { onZap(+1); onDismiss() })
+                    MenuRow(label = "▼ Vorheriger Sender", onClick = { onZap(-1); onDismiss() })
+                }
+                if (onSwapLast != null) {
+                    MenuRow(label = "↩ Zuletzt gesehener Sender", onClick = { onSwapLast(); onDismiss() })
+                }
 
                 MenuRow(
                     label = "Sleep-Timer: " + (sleepMinutes?.let { "$it min" } ?: "Aus"),
