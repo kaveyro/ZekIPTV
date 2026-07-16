@@ -2,16 +2,14 @@ package com.example.iptv
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -29,7 +27,6 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Star
-import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -48,7 +45,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -57,27 +53,113 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalFocusManager
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
+import com.example.iptv.ui.tvFocusFrame
 
+/**
+ * App-Shell: linke Navigations-Rail + aktiver Bereich (Suche/Home/Live/Filme/Serien/Einstellungen).
+ * Player, Film-Detail und Episodenliste laufen als Vollbild außerhalb dieser Shell (siehe IptvApp).
+ */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun MainScreen(mainViewModel: MainViewModel = viewModel()) {
+    val destination by mainViewModel.currentDestination
     val search by mainViewModel.searchQuery
-    val uiState by mainViewModel.uiState
-    val channels by mainViewModel.visibleChannels
-    val groups by mainViewModel.groups
     val selectedGroup by mainViewModel.selectedGroup
-    val favorites by mainViewModel.favorites
-    val contentTab by mainViewModel.contentTab
+    val vodCategory by mainViewModel.selectedVodCategory
+    val seriesCategory by mainViewModel.selectedSeriesCategory
     val xtreamAvailable by mainViewModel.xtreamAvailable
+    val favorites by mainViewModel.favorites
 
-    val hasChannels = channels.isNotEmpty() || groups.isNotEmpty()
+    var actionsChannel by remember { mutableStateOf<Channel?>(null) }
 
+    // BACK: erst Filter im aktuellen Bereich zurücksetzen, dann zu Home, erst von dort die App beenden.
+    BackHandler(enabled = destination != NavDestination.HOME) {
+        when {
+            destination == NavDestination.LIVE && selectedGroup != null ->
+                mainViewModel.selectGroup(null)
+
+            destination == NavDestination.MOVIES && vodCategory != null ->
+                mainViewModel.selectVodCategory(null)
+
+            destination == NavDestination.SERIES && seriesCategory != null ->
+                mainViewModel.selectSeriesCategory(null)
+
+            destination == NavDestination.SEARCH && search.isNotEmpty() ->
+                mainViewModel.onSearchChange("")
+
+            else -> mainViewModel.navigate(NavDestination.HOME)
+        }
+    }
+
+    Row(modifier = Modifier.fillMaxSize()) {
+        NavRail(
+            current = destination,
+            xtreamAvailable = xtreamAvailable,
+            onNavigate = mainViewModel::navigate
+        )
+        Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
+            when (destination) {
+                NavDestination.SEARCH -> SearchScreen(mainViewModel) { actionsChannel = it }
+                NavDestination.HOME -> HomeScreen(mainViewModel) { actionsChannel = it }
+                NavDestination.LIVE -> LiveScreen(mainViewModel) { actionsChannel = it }
+                NavDestination.MOVIES -> VodContent(mainViewModel)
+                NavDestination.SERIES -> SeriesContent(mainViewModel)
+                NavDestination.SETTINGS -> SettingsScreen(mainViewModel)
+            }
+        }
+    }
+
+    // Lang-Druck-Menü eines Senders (Tagesprogramm / Favorit)
+    val dialogChannel = actionsChannel
+    if (dialogChannel != null) {
+        ChannelActionsDialog(
+            channel = dialogChannel,
+            isFavorite = dialogChannel.url in favorites,
+            hasEpg = mainViewModel.programmesFor(dialogChannel).isNotEmpty(),
+            onShowEpg = {
+                actionsChannel = null
+                mainViewModel.openEpgFor(dialogChannel)
+            },
+            onToggleFavorite = { mainViewModel.toggleFavorite(dialogChannel) },
+            onDismiss = { actionsChannel = null }
+        )
+    }
+
+    // Tagesprogramm-Ansicht
+    val epgDialogChannel by mainViewModel.epgChannel
+    val epgChannelValue = epgDialogChannel
+    if (epgChannelValue != null) {
+        EpgDayDialog(
+            channelName = epgChannelValue.name,
+            programmes = mainViewModel.programmesFor(epgChannelValue),
+            onDismiss = { mainViewModel.closeEpg() }
+        )
+    }
+}
+
+/** Einheitlicher Bereichs-Titel oben in jedem Destination-Screen. */
+@Composable
+internal fun ScreenTitle(title: String) {
+    Text(
+        text = title,
+        style = MaterialTheme.typography.headlineMedium,
+        modifier = Modifier.padding(bottom = 16.dp)
+    )
+}
+
+// ---------- Suche ----------
+
+@Composable
+private fun SearchScreen(
+    mainViewModel: MainViewModel,
+    onChannelLongPress: (Channel) -> Unit
+) {
+    val search by mainViewModel.searchQuery
     val focusManager = LocalFocusManager.current
     // Compose-Textfelder konsumieren DPAD-Tasten für die Cursor-Steuerung und werden so
     // zur Fokus-Falle für die Fernbedienung. DPAD_DOWN reicht den Fokus explizit weiter.
@@ -90,160 +172,62 @@ fun MainScreen(mainViewModel: MainViewModel = viewModel()) {
         }
     }
 
+    Column(modifier = Modifier.fillMaxSize().padding(horizontal = 28.dp, vertical = 24.dp)) {
+        ScreenTitle("Suche")
+        OutlinedTextField(
+            value = search,
+            onValueChange = mainViewModel::onSearchChange,
+            label = { Text("Sender, Filme, Serien…") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth().then(escapeDownOnDpad)
+        )
+        if (search.isBlank()) {
+            Box(modifier = Modifier.fillMaxSize()) {
+                Text(
+                    text = "Suchbegriff eingeben — durchsucht Live-TV, Filme und Serien.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.align(Alignment.Center)
+                )
+            }
+        } else {
+            SearchResults(mainViewModel, onChannelLongPress)
+        }
+    }
+}
+
+// ---------- Live-TV ----------
+
+@Composable
+private fun LiveScreen(
+    mainViewModel: MainViewModel,
+    onChannelLongPress: (Channel) -> Unit
+) {
+    val uiState by mainViewModel.uiState
+    val channels by mainViewModel.visibleChannels
+    val groups by mainViewModel.groups
+    val selectedGroup by mainViewModel.selectedGroup
+    val favorites by mainViewModel.favorites
+    val hasChannels = channels.isNotEmpty() || groups.isNotEmpty()
+
     val listState = rememberLazyListState()
     val listFocusRequester = remember { FocusRequester() }
     val targetFocusIndex = mainViewModel.lastFocusedIndex.coerceIn(0, maxOf(0, channels.lastIndex))
     val pendingListFocus by mainViewModel.pendingListFocus
 
     // Fokus-Wiederherstellung NUR bei Erstladung oder Rückkehr aus dem Player (explizites Flag).
-    LaunchedEffect(pendingListFocus, channels.size, contentTab) {
-        if (pendingListFocus && contentTab == ContentTab.LIVE && channels.isNotEmpty()) {
+    LaunchedEffect(pendingListFocus, channels.size) {
+        if (pendingListFocus && channels.isNotEmpty()) {
             listState.scrollToItem(targetFocusIndex)
             runCatching { listFocusRequester.requestFocus() }
             mainViewModel.pendingListFocus.value = false
         }
     }
 
-    // BACK: erst Filter zurücksetzen, dann zum Live-Tab, erst dann die App beenden.
-    val vodCategory by mainViewModel.selectedVodCategory
-    val seriesCategory by mainViewModel.selectedSeriesCategory
-    BackHandler(
-        enabled = selectedGroup != null || search.isNotEmpty() ||
-            contentTab != ContentTab.LIVE || vodCategory != null || seriesCategory != null
-    ) {
-        when {
-            search.isNotEmpty() || selectedGroup != null || vodCategory != null || seriesCategory != null -> {
-                mainViewModel.onSearchChange("")
-                mainViewModel.selectGroup(null)
-                mainViewModel.selectVodCategory(null)
-                mainViewModel.selectSeriesCategory(null)
-            }
+    Column(modifier = Modifier.fillMaxSize().padding(horizontal = 28.dp, vertical = 24.dp)) {
+        ScreenTitle("Live-TV")
 
-            else -> mainViewModel.selectTab(ContentTab.LIVE)
-        }
-    }
-
-    Column(modifier = Modifier.fillMaxSize().padding(24.dp)) {
-        // Kopfzeile: Titel + Suche + Einstellungen
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Image(
-                painter = painterResource(R.drawable.ic_launcher),
-                contentDescription = null,
-                modifier = Modifier.size(44.dp)
-            )
-            Spacer(Modifier.width(12.dp))
-            Text("ZekIPTV", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.width(24.dp))
-            if (hasChannels) {
-                OutlinedTextField(
-                    value = search,
-                    onValueChange = mainViewModel::onSearchChange,
-                    label = { Text("Suche") },
-                    singleLine = true,
-                    modifier = Modifier.weight(1f).then(escapeDownOnDpad)
-                )
-                Spacer(Modifier.width(16.dp))
-            } else {
-                Spacer(Modifier.weight(1f))
-            }
-            Button(onClick = { mainViewModel.showSettings.value = true }) {
-                Text("Einstellungen")
-            }
-        }
-
-        // Inhalts-Tabs (nur bei Xtream-Anbietern mit Filmen/Serien)
-        if (xtreamAvailable) {
-            Spacer(Modifier.height(16.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                GroupChip("Live-TV", selected = contentTab == ContentTab.LIVE) {
-                    mainViewModel.selectTab(ContentTab.LIVE)
-                }
-                GroupChip("Filme", selected = contentTab == ContentTab.MOVIES) {
-                    mainViewModel.selectTab(ContentTab.MOVIES)
-                }
-                GroupChip("Serien", selected = contentTab == ContentTab.SERIES) {
-                    mainViewModel.selectTab(ContentTab.SERIES)
-                }
-            }
-        }
-
-        var actionsChannel by remember { mutableStateOf<Channel?>(null) }
-
-        if (search.isNotBlank()) {
-            // Globale Suche über Live + Filme + Serien (ersetzt den Tab-Inhalt).
-            SearchResults(mainViewModel, onChannelLongPress = { actionsChannel = it })
-        } else {
-            when (contentTab) {
-                ContentTab.LIVE -> LiveContent(
-                    mainViewModel = mainViewModel,
-                    uiState = uiState,
-                    channels = channels,
-                    groups = groups,
-                    selectedGroup = selectedGroup,
-                    favorites = favorites,
-                    hasChannels = hasChannels,
-                    listState = listState,
-                    listFocusRequester = listFocusRequester,
-                    targetFocusIndex = targetFocusIndex,
-                    onChannelLongPress = { actionsChannel = it }
-                )
-
-                ContentTab.MOVIES -> VodContent(mainViewModel)
-
-                ContentTab.SERIES -> SeriesContent(mainViewModel)
-            }
-        }
-
-        // Lang-Druck-Menü eines Senders (Tagesprogramm / Favorit)
-        val dialogChannel = actionsChannel
-        if (dialogChannel != null) {
-            ChannelActionsDialog(
-                channel = dialogChannel,
-                isFavorite = dialogChannel.url in favorites,
-                hasEpg = mainViewModel.programmesFor(dialogChannel).isNotEmpty(),
-                onShowEpg = {
-                    actionsChannel = null
-                    mainViewModel.openEpgFor(dialogChannel)
-                },
-                onToggleFavorite = { mainViewModel.toggleFavorite(dialogChannel) },
-                onDismiss = { actionsChannel = null }
-            )
-        }
-
-        // Tagesprogramm-Ansicht
-        val epgDialogChannel by mainViewModel.epgChannel
-        val epgChannelValue = epgDialogChannel
-        if (epgChannelValue != null) {
-            EpgDayDialog(
-                channelName = epgChannelValue.name,
-                programmes = mainViewModel.programmesFor(epgChannelValue),
-                onDismiss = { mainViewModel.closeEpg() }
-            )
-        }
-    }
-}
-
-@Composable
-private fun LiveContent(
-    mainViewModel: MainViewModel,
-    uiState: PlaylistUiState,
-    channels: List<Channel>,
-    groups: List<String>,
-    selectedGroup: String?,
-    favorites: Set<String>,
-    hasChannels: Boolean,
-    listState: androidx.compose.foundation.lazy.LazyListState,
-    listFocusRequester: FocusRequester,
-    targetFocusIndex: Int,
-    onChannelLongPress: (Channel) -> Unit
-) {
-    Column {
         // Gruppen-/Kategorie-Auswahl
         if (groups.isNotEmpty()) {
-            Spacer(Modifier.height(16.dp))
             LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 item {
                     GroupChip("Alle", selected = selectedGroup == null) {
@@ -256,9 +240,8 @@ private fun LiveContent(
                     }
                 }
             }
+            Spacer(Modifier.height(16.dp))
         }
-
-        Spacer(Modifier.height(16.dp))
 
         Box(modifier = Modifier.fillMaxSize()) {
             when (uiState) {
@@ -268,7 +251,7 @@ private fun LiveContent(
 
                 is PlaylistUiState.Error -> {
                     Text(
-                        text = uiState.message,
+                        text = (uiState as PlaylistUiState.Error).message,
                         color = MaterialTheme.colorScheme.error,
                         modifier = Modifier.align(Alignment.Center)
                     )
@@ -277,7 +260,7 @@ private fun LiveContent(
                 else -> {
                     if (channels.isEmpty()) {
                         Text(
-                            text = if (hasChannels) "Keine Treffer." else "In den Einstellungen (oben rechts) eine Playlist hinzufügen.",
+                            text = if (hasChannels) "Keine Treffer." else "Über das Menü links unter „Einstellungen“ eine Playlist hinzufügen.",
                             modifier = Modifier.align(Alignment.Center)
                         )
                     } else {
@@ -308,6 +291,8 @@ private fun LiveContent(
     }
 }
 
+// ---------- Filme ----------
+
 @Composable
 private fun VodContent(mainViewModel: MainViewModel) {
     val vod by mainViewModel.visibleVod
@@ -316,9 +301,10 @@ private fun VodContent(mainViewModel: MainViewModel) {
     val contentInfo by mainViewModel.contentInfo
     val favorites by mainViewModel.favorites
 
-    Column {
+    Column(modifier = Modifier.fillMaxSize().padding(horizontal = 28.dp, vertical = 24.dp)) {
+        ScreenTitle("Filme")
+
         if (categories.isNotEmpty()) {
-            Spacer(Modifier.height(16.dp))
             LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 item {
                     GroupChip("Alle", selected = selectedCategory == null) {
@@ -336,9 +322,8 @@ private fun VodContent(mainViewModel: MainViewModel) {
                     }
                 }
             }
+            Spacer(Modifier.height(16.dp))
         }
-
-        Spacer(Modifier.height(16.dp))
 
         Box(modifier = Modifier.fillMaxSize()) {
             if (vod.isEmpty()) {
@@ -368,6 +353,8 @@ private fun VodContent(mainViewModel: MainViewModel) {
     }
 }
 
+// ---------- Serien ----------
+
 @Composable
 private fun SeriesContent(mainViewModel: MainViewModel) {
     val series by mainViewModel.visibleSeries
@@ -376,9 +363,10 @@ private fun SeriesContent(mainViewModel: MainViewModel) {
     val contentInfo by mainViewModel.contentInfo
     val favorites by mainViewModel.favorites
 
-    Column {
+    Column(modifier = Modifier.fillMaxSize().padding(horizontal = 28.dp, vertical = 24.dp)) {
+        ScreenTitle("Serien")
+
         if (categories.isNotEmpty()) {
-            Spacer(Modifier.height(16.dp))
             LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 item {
                     GroupChip("Alle", selected = selectedCategory == null) {
@@ -396,9 +384,8 @@ private fun SeriesContent(mainViewModel: MainViewModel) {
                     }
                 }
             }
+            Spacer(Modifier.height(16.dp))
         }
-
-        Spacer(Modifier.height(16.dp))
 
         Box(modifier = Modifier.fillMaxSize()) {
             if (series.isEmpty()) {
@@ -501,7 +488,6 @@ private fun SearchSectionTitle(title: String) {
 }
 
 /** Poster-Kachel für Filme/Serien im Grid, D-Pad-fokussierbar. */
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun PosterCard(
     title: String,
@@ -510,16 +496,14 @@ private fun PosterCard(
     onClick: () -> Unit,
     onLongClick: () -> Unit
 ) {
-    var focused by remember { mutableStateOf(false) }
-    val borderColor = if (focused) MaterialTheme.colorScheme.primary else Color.Transparent
-
     Column(
         modifier = Modifier
-            .clip(RoundedCornerShape(12.dp))
-            .onFocusChanged { focused = it.isFocused }
-            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
-            .background(if (focused) MaterialTheme.colorScheme.primary.copy(alpha = 0.25f) else Color.Transparent)
-            .border(width = 3.dp, color = borderColor, shape = RoundedCornerShape(12.dp))
+            .tvFocusFrame(
+                onClick = onClick,
+                onLongClick = onLongClick,
+                focusedScale = 1.08f,
+                restColor = Color.Transparent
+            )
             .padding(6.dp)
     ) {
         Box {
@@ -554,7 +538,7 @@ private fun PosterCard(
                 Icon(
                     imageVector = Icons.Filled.Star,
                     contentDescription = "Favorit",
-                    tint = Color(0xFFFFD54F),
+                    tint = MaterialTheme.colorScheme.tertiary,
                     modifier = Modifier.align(Alignment.TopEnd).padding(6.dp).size(22.dp)
                 )
             }
@@ -570,9 +554,8 @@ private fun PosterCard(
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun ChannelRow(
+internal fun ChannelRow(
     channel: Channel,
     isFavorite: Boolean,
     epg: EpgNowNext,
@@ -580,26 +563,12 @@ private fun ChannelRow(
     onClick: () -> Unit,
     onLongClick: () -> Unit
 ) {
-    var focused by remember { mutableStateOf(false) }
-    val bg = if (focused) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant
-    val fg = if (focused) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
+    val fg = MaterialTheme.colorScheme.onSurface
 
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .onFocusChanged { focused = it.isFocused }
-            // combinedClickable macht das Item D-Pad-fokussierbar; Center = öffnen, Lang = Menü.
-            .combinedClickable(
-                onClick = onClick,
-                onLongClick = onLongClick
-            )
-            .background(bg)
-            .border(
-                width = if (focused) 3.dp else 0.dp,
-                color = if (focused) MaterialTheme.colorScheme.onPrimary else Color.Transparent,
-                shape = RoundedCornerShape(12.dp)
-            )
+            .tvFocusFrame(onClick = onClick, onLongClick = onLongClick)
             .padding(horizontal = 16.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -626,7 +595,7 @@ private fun ChannelRow(
                         append("Jetzt: ${epg.now}")
                         if (epg.next != null) append("  ·  Gleich: ${epg.next}")
                     },
-                    color = fg.copy(alpha = 0.7f),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     style = MaterialTheme.typography.bodySmall
@@ -640,13 +609,13 @@ private fun ChannelRow(
                             .fillMaxWidth()
                             .height(3.dp)
                             .clip(RoundedCornerShape(2.dp))
-                            .background(fg.copy(alpha = 0.25f))
+                            .background(MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f))
                     ) {
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth(progress)
                                 .height(3.dp)
-                                .background(fg)
+                                .background(MaterialTheme.colorScheme.primary)
                         )
                     }
                 }
@@ -656,14 +625,13 @@ private fun ChannelRow(
             Icon(
                 imageVector = Icons.Filled.Star,
                 contentDescription = "Favorit",
-                tint = fg
+                tint = MaterialTheme.colorScheme.tertiary
             )
         }
     }
 }
 
 /** Zeile für Filme/Serien mit Poster, D-Pad-fokussierbar. */
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun MediaRow(
     title: String,
@@ -672,22 +640,12 @@ private fun MediaRow(
     showResume: Boolean,
     onClick: () -> Unit
 ) {
-    var focused by remember { mutableStateOf(false) }
-    val bg = if (focused) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant
-    val fg = if (focused) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
+    val fg = MaterialTheme.colorScheme.onSurface
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .onFocusChanged { focused = it.isFocused }
-            .combinedClickable(onClick = onClick)
-            .background(bg)
-            .border(
-                width = if (focused) 3.dp else 0.dp,
-                color = if (focused) MaterialTheme.colorScheme.onPrimary else Color.Transparent,
-                shape = RoundedCornerShape(12.dp)
-            )
+            .tvFocusFrame(onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -717,7 +675,7 @@ private fun MediaRow(
             if (sub.isNotEmpty()) {
                 Text(
                     text = sub,
-                    color = fg.copy(alpha = 0.7f),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     style = MaterialTheme.typography.bodySmall
@@ -727,37 +685,27 @@ private fun MediaRow(
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun GroupChip(
     label: String,
     selected: Boolean,
     onClick: () -> Unit
 ) {
-    var focused by remember { mutableStateOf(false) }
-    val bg = when {
-        focused -> MaterialTheme.colorScheme.primary
-        selected -> MaterialTheme.colorScheme.secondaryContainer
-        else -> MaterialTheme.colorScheme.surfaceVariant
-    }
-    val fg = when {
-        focused -> MaterialTheme.colorScheme.onPrimary
-        selected -> MaterialTheme.colorScheme.onSecondaryContainer
-        else -> MaterialTheme.colorScheme.onSurface
-    }
     Text(
         text = label,
-        color = fg,
+        color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
         maxLines = 1,
+        style = MaterialTheme.typography.labelLarge,
         modifier = Modifier
-            .clip(RoundedCornerShape(20.dp))
-            .onFocusChanged { focused = it.isFocused }
-            .combinedClickable(onClick = onClick)
-            .background(bg)
-            .border(
-                width = if (focused) 2.dp else 0.dp,
-                color = if (focused) MaterialTheme.colorScheme.onPrimary else Color.Transparent,
-                shape = RoundedCornerShape(20.dp)
+            .tvFocusFrame(
+                onClick = onClick,
+                shape = RoundedCornerShape(20.dp),
+                restColor = if (selected) {
+                    MaterialTheme.colorScheme.secondaryContainer
+                } else {
+                    MaterialTheme.colorScheme.surfaceVariant
+                }
             )
             .padding(horizontal = 18.dp, vertical = 10.dp)
     )

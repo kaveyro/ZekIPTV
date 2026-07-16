@@ -23,8 +23,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 
@@ -44,7 +44,33 @@ fun VodDetailScreen(mainViewModel: MainViewModel) {
     // Zurück-Taste schließt die Detail-Seite.
     BackHandler { mainViewModel.closeVod() }
 
-    Row(modifier = Modifier.fillMaxSize().padding(40.dp)) {
+    Box(modifier = Modifier.fillMaxSize()) {
+        // Full-Bleed-Backdrop: Poster hinter dem Inhalt, mit Scrim-Verlauf zum Hintergrund.
+        // Bewusst kein Modifier.blur — braucht API 31+, FireTV-Geräte liegen darunter.
+        if (vod.icon != null) {
+            AsyncImage(
+                model = vod.icon,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                alpha = 0.35f,
+                modifier = Modifier.fillMaxSize()
+            )
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(
+                        Brush.verticalGradient(
+                            colors = listOf(
+                                MaterialTheme.colorScheme.background.copy(alpha = 0.55f),
+                                MaterialTheme.colorScheme.background.copy(alpha = 0.92f),
+                                MaterialTheme.colorScheme.background
+                            )
+                        )
+                    )
+            )
+        }
+
+        Row(modifier = Modifier.fillMaxSize().padding(40.dp)) {
         // Poster
         if (vod.icon != null) {
             AsyncImage(
@@ -63,8 +89,7 @@ fun VodDetailScreen(mainViewModel: MainViewModel) {
         Column(modifier = Modifier.fillMaxSize()) {
             Text(
                 text = vod.name,
-                style = MaterialTheme.typography.headlineMedium,
-                fontWeight = FontWeight.Bold
+                style = MaterialTheme.typography.displaySmall
             )
 
             // Metadaten-Zeile: Jahr · Genre · Bewertung · Dauer
@@ -135,6 +160,7 @@ fun VodDetailScreen(mainViewModel: MainViewModel) {
                 }
                 Box(Modifier.height(24.dp))
             }
+        }
         }
     }
 }

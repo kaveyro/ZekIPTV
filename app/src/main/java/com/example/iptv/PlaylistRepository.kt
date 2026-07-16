@@ -23,6 +23,13 @@ private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(na
 data class PlaylistEntry(val name: String, val url: String)
 
 /**
+ * Anzeige-Metadaten eines gestarteten VOD/Episoden-Streams für die "Weiter schauen"-Reihe.
+ * Nötig, weil [PlaylistRepository]s Resume-Positionen nur URL→Position speichern und die
+ * Xtream-Kataloge (Titel/Poster) erst lazy geladen werden.
+ */
+data class WatchMeta(val title: String, val poster: String?, val ts: Long, val durationMs: Long = 0L)
+
+/**
  * Persistiert App-Daten: aktive M3U-URL, geparste Kanäle (als JSON), Favoriten,
  * gespeicherte Playlists, Theme-Modus und EPG-Quellen — damit die App nach einem
  * Neustart ohne erneute Eingabe / erneuten Netzabruf startet.
@@ -39,6 +46,13 @@ class PlaylistRepository(private val context: Context) {
         val AUTOPLAY = stringPreferencesKey("autoplay_last") // "true"/"false"
         val LAST_CHANNEL = stringPreferencesKey("last_channel_url")
         val RESUME = stringPreferencesKey("resume_positions_json") // {url: positionMs}
+        val RECENT_CHANNELS = stringPreferencesKey("recent_channels_json") // ["url", ...] neueste zuerst
+        val WATCH_META = stringPreferencesKey("watch_meta_json") // {url: {title, poster, ts, duration}}
+    }
+
+    private companion object {
+        const val MAX_RECENT_CHANNELS = 15
+        const val MAX_WATCH_META = 30
     }
 
     val urlFlow: Flow<String> = context.dataStore.data.map { it[Keys.URL] ?: "" }
@@ -63,6 +77,14 @@ class PlaylistRepository(private val context: Context) {
 
     val resumePositionsFlow: Flow<Map<String, Long>> = context.dataStore.data.map { prefs ->
         prefs[Keys.RESUME]?.let(::decodeResume) ?: emptyMap()
+    }
+
+    val recentChannelsFlow: Flow<List<String>> = context.dataStore.data.map { prefs ->
+        prefs[Keys.RECENT_CHANNELS]?.let(::decodeStringList) ?: emptyList()
+    }
+
+    val watchMetaFlow: Flow<Map<String, WatchMeta>> = context.dataStore.data.map { prefs ->
+        prefs[Keys.WATCH_META]?.let(::decodeWatchMeta) ?: emptyMap()
     }
 
     suspend fun saveUrl(url: String) {
@@ -98,6 +120,41 @@ class PlaylistRepository(private val context: Context) {
 
     suspend fun saveLastChannel(url: String) {
         context.dataStore.edit { it[Keys.LAST_CHANNEL] = url }
+    }
+
+    /** Merkt einen Sender als zuletzt gesehen (Dedupe, neueste zuerst, begrenzt). */
+    suspend fun addRecentChannel(url: String) {
+        context.dataStore.edit { prefs ->
+            val current = prefs[Keys.RECENT_CHANNELS]?.let(::decodeStringList) ?: emptyList()
+            val updated = (listOf(url) + current.filter { it != url }).take(MAX_RECENT_CHANNELS)
+            prefs[Keys.RECENT_CHANNELS] = JSONArray(updated).toString()
+        }
+    }
+
+    /** Speichert Titel/Poster eines gestarteten VOD/Episoden-Streams für "Weiter schauen". */
+    suspend fun saveWatchMeta(url: String, title: String, poster: String?) {
+        context.dataStore.edit { prefs ->
+            val current = prefs[Keys.WATCH_META]?.let(::decodeWatchMeta)?.toMutableMap() ?: mutableMapOf()
+            val existing = current[url]
+            current[url] = WatchMeta(title, poster, System.currentTimeMillis(), existing?.durationMs ?: 0L)
+            val trimmed = current.entries
+                .sortedByDescending { it.value.ts }
+                .take(MAX_WATCH_META)
+                .associate { it.key to it.value }
+            prefs[Keys.WATCH_META] = encodeWatchMeta(trimmed)
+        }
+    }
+
+    /** Ergänzt die Gesamtdauer eines Streams (bekannt erst, sobald der Player geladen hat). */
+    suspend fun updateWatchDuration(url: String, durationMs: Long) {
+        if (durationMs <= 0) return
+        context.dataStore.edit { prefs ->
+            val current = prefs[Keys.WATCH_META]?.let(::decodeWatchMeta)?.toMutableMap() ?: return@edit
+            val existing = current[url] ?: return@edit
+            if (existing.durationMs == durationMs) return@edit
+            current[url] = existing.copy(durationMs = durationMs)
+            prefs[Keys.WATCH_META] = encodeWatchMeta(current)
+        }
     }
 
     /** Speichert die Wiedergabeposition eines VOD-Titels (0 = zurücksetzen/fertig gesehen). */
@@ -169,6 +226,46 @@ class PlaylistRepository(private val context: Context) {
         emptyMap()
     }
 
+    private fun decodeStringList(json: String): List<String> = try {
+        val array = JSONArray(json)
+        buildList { for (i in 0 until array.length()) add(array.getString(i)) }
+    } catch (e: Exception) {
+        emptyList()
+    }
+
+    private fun encodeWatchMeta(meta: Map<String, WatchMeta>): String {
+        val root = JSONObject()
+        meta.forEach { (url, m) ->
+            root.put(url, JSONObject().apply {
+                put("title", m.title)
+                put("poster", m.poster ?: JSONObject.NULL)
+                put("ts", m.ts)
+                put("duration", m.durationMs)
+            })
+        }
+        return root.toString()
+    }
+
+    private fun decodeWatchMeta(json: String): Map<String, WatchMeta> = try {
+        val root = JSONObject(json)
+        buildMap {
+            root.keys().forEach { url ->
+                val obj = root.getJSONObject(url)
+                put(
+                    url,
+                    WatchMeta(
+                        title = obj.optString("title"),
+                        poster = obj.optString("poster").ifEmpty { null }?.takeIf { it != "null" },
+                        ts = obj.optLong("ts"),
+                        durationMs = obj.optLong("duration")
+                    )
+                )
+            }
+        }
+    } catch (e: Exception) {
+        emptyMap()
+    }
+
     // ---------- Backup (Playlists, Favoriten, EPG-Quellen, Einstellungen) ----------
 
     private val backupFile: File
@@ -184,6 +281,8 @@ class PlaylistRepository(private val context: Context) {
             put("epgSources", JSONArray((prefs[Keys.EPG_SOURCES] ?: emptySet()).toList()))
             put("theme", prefs[Keys.THEME] ?: "dark")
             put("autoplay", prefs[Keys.AUTOPLAY] ?: "false")
+            put("recentChannels", prefs[Keys.RECENT_CHANNELS] ?: "[]")
+            put("watchMeta", prefs[Keys.WATCH_META] ?: "{}")
         }
         backupFile.writeText(root.toString(2))
         backupFile.absolutePath
@@ -203,6 +302,8 @@ class PlaylistRepository(private val context: Context) {
             prefs[Keys.EPG_SOURCES] = jsonToSet("epgSources")
             prefs[Keys.THEME] = root.optString("theme", "dark")
             prefs[Keys.AUTOPLAY] = root.optString("autoplay", "false")
+            prefs[Keys.RECENT_CHANNELS] = root.optString("recentChannels", "[]")
+            prefs[Keys.WATCH_META] = root.optString("watchMeta", "{}")
         }
         backupFile.absolutePath
     }

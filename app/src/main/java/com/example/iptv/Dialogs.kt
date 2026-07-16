@@ -27,6 +27,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import com.example.iptv.ui.tvFocusFrame
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -35,14 +36,9 @@ import java.util.Locale
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun DialogRow(label: String, highlighted: Boolean = false, onClick: () -> Unit) {
-    var focused by remember { mutableStateOf(false) }
     Text(
         text = label,
-        color = when {
-            focused -> MaterialTheme.colorScheme.onPrimary
-            highlighted -> MaterialTheme.colorScheme.primary
-            else -> MaterialTheme.colorScheme.onSurface
-        },
+        color = if (highlighted) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
         fontWeight = if (highlighted) FontWeight.Bold else FontWeight.Normal,
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
@@ -50,10 +46,11 @@ internal fun DialogRow(label: String, highlighted: Boolean = false, onClick: () 
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 2.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .onFocusChanged { focused = it.isFocused }
-            .combinedClickable(onClick = onClick)
-            .background(if (focused) MaterialTheme.colorScheme.primary else Color.Transparent)
+            .tvFocusFrame(
+                onClick = onClick,
+                shape = RoundedCornerShape(8.dp),
+                restColor = Color.Transparent
+            )
             .padding(horizontal = 12.dp, vertical = 10.dp)
     )
 }

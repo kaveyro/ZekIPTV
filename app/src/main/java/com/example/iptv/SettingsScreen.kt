@@ -42,6 +42,7 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.example.iptv.ui.tvFocusFrame
 
 /** Kuratierte, frei verfügbare XMLTV-EPG-Quellen für den Schnell-Adder. */
 private val FREE_EPG_SOURCES = listOf(
@@ -82,25 +83,16 @@ fun SettingsScreen(mainViewModel: MainViewModel) {
         }
     }
 
-    // Zurück-Taste schließt die Einstellungen.
-    BackHandler { mainViewModel.showSettings.value = false }
-
     LazyColumn(
-        modifier = Modifier.fillMaxSize().padding(horizontal = 32.dp, vertical = 24.dp),
+        modifier = Modifier.fillMaxSize().padding(horizontal = 28.dp, vertical = 24.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         item {
-            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    "Einstellungen",
-                    style = MaterialTheme.typography.headlineMedium,
-                    fontWeight = FontWeight.Bold
-                )
-                Spacer(Modifier.weight(1f))
-                Button(onClick = { mainViewModel.showSettings.value = false }) {
-                    Text("Zurück")
-                }
-            }
+            Text(
+                "Einstellungen",
+                style = MaterialTheme.typography.headlineMedium,
+                modifier = Modifier.padding(bottom = 4.dp)
+            )
         }
 
         // ---------- Playlists ----------
@@ -111,7 +103,7 @@ fun SettingsScreen(mainViewModel: MainViewModel) {
                 subtitle = entry.url,
                 onClick = {
                     mainViewModel.selectPlaylist(entry)
-                    mainViewModel.showSettings.value = false
+                    mainViewModel.navigate(NavDestination.LIVE)
                 },
                 onLongClick = { mainViewModel.removePlaylist(entry) }
             )
@@ -179,8 +171,8 @@ fun SettingsScreen(mainViewModel: MainViewModel) {
         }
         item {
             Text(
-                "Tipp: Im Player öffnet die MENÜ-Taste (☰) Senderwechsel, Tonspur, Untertitel und " +
-                    "Sleep-Timer. OK zeigt die Steuerleiste (Pause/Vor-/Zurückspulen).",
+                "Tipp: Im Player öffnet ◀ (links) die Senderliste zum Zappen, die MENÜ-Taste (☰) " +
+                    "Senderwechsel, Tonspur, Untertitel und Sleep-Timer. OK zeigt die Steuerleiste.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
             )
@@ -284,27 +276,15 @@ private fun SettingsRow(
     onClick: () -> Unit,
     onLongClick: (() -> Unit)? = null
 ) {
-    var focused by remember { mutableStateOf(false) }
-    val bg = if (focused) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant
-    val fg = if (focused) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
-
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .onFocusChanged { focused = it.isFocused }
-            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
-            .background(bg)
-            .border(
-                width = if (focused) 3.dp else 0.dp,
-                color = if (focused) MaterialTheme.colorScheme.onPrimary else Color.Transparent,
-                shape = RoundedCornerShape(12.dp)
-            )
+            .tvFocusFrame(onClick = onClick, onLongClick = onLongClick)
             .padding(horizontal = 16.dp, vertical = 12.dp)
     ) {
         Text(
             text = title,
-            color = fg,
+            color = MaterialTheme.colorScheme.onSurface,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             style = MaterialTheme.typography.titleMedium
@@ -312,7 +292,7 @@ private fun SettingsRow(
         if (subtitle != null) {
             Text(
                 text = subtitle,
-                color = fg.copy(alpha = 0.7f),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 style = MaterialTheme.typography.bodySmall

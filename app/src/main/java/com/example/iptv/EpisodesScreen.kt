@@ -30,12 +30,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
+import com.example.iptv.ui.tvFocusFrame
 
 /** Episodenliste einer Serie (nach Staffel/Episode sortiert), komplett D-Pad-bedienbar. */
 @OptIn(ExperimentalFoundationApi::class)
@@ -49,26 +49,49 @@ fun EpisodesScreen(mainViewModel: MainViewModel) {
     // Zurück-Taste schließt die Episodenliste.
     BackHandler { mainViewModel.closeSeries() }
 
-    Column(modifier = Modifier.fillMaxSize().padding(24.dp)) {
+    Box(modifier = Modifier.fillMaxSize()) {
+        // Serien-Cover als dezenter Hero-Backdrop mit Scrim-Verlauf zum Hintergrund.
+        if (series?.cover != null) {
+            AsyncImage(
+                model = series?.cover,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                alpha = 0.3f,
+                modifier = Modifier.fillMaxSize()
+            )
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(
+                        Brush.verticalGradient(
+                            colors = listOf(
+                                MaterialTheme.colorScheme.background.copy(alpha = 0.6f),
+                                MaterialTheme.colorScheme.background.copy(alpha = 0.94f),
+                                MaterialTheme.colorScheme.background
+                            )
+                        )
+                    )
+            )
+        }
+
+    Column(modifier = Modifier.fillMaxSize().padding(28.dp)) {
         Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             if (series?.cover != null) {
                 AsyncImage(
                     model = series?.cover,
                     contentDescription = null,
-                    modifier = Modifier.size(56.dp).clip(RoundedCornerShape(8.dp))
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.size(72.dp).clip(RoundedCornerShape(10.dp))
                 )
-                Spacer(Modifier.width(16.dp))
+                Spacer(Modifier.width(20.dp))
             }
             Text(
                 text = series?.name ?: "Serie",
-                style = MaterialTheme.typography.headlineMedium,
-                fontWeight = FontWeight.Bold,
+                style = MaterialTheme.typography.displaySmall,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f)
             )
-            Spacer(Modifier.width(16.dp))
-            Button(onClick = { mainViewModel.closeSeries() }) { Text("Zurück") }
         }
 
         // Metadaten + Beschreibung der Serie (aus dem Anbieter-Katalog)
@@ -122,6 +145,7 @@ fun EpisodesScreen(mainViewModel: MainViewModel) {
             }
         }
     }
+    }
 }
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -131,27 +155,15 @@ private fun EpisodeRow(
     hasResume: Boolean,
     onClick: () -> Unit
 ) {
-    var focused by remember { mutableStateOf(false) }
-    val bg = if (focused) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant
-    val fg = if (focused) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
-
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .onFocusChanged { focused = it.isFocused }
-            .combinedClickable(onClick = onClick)
-            .background(bg)
-            .border(
-                width = if (focused) 3.dp else 0.dp,
-                color = if (focused) MaterialTheme.colorScheme.onPrimary else Color.Transparent,
-                shape = RoundedCornerShape(12.dp)
-            )
+            .tvFocusFrame(onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 12.dp)
     ) {
         Text(
             text = "S%02d E%02d  %s".format(episode.season, episode.episode, episode.title),
-            color = fg,
+            color = MaterialTheme.colorScheme.onSurface,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             style = MaterialTheme.typography.titleMedium
@@ -159,7 +171,7 @@ private fun EpisodeRow(
         if (hasResume) {
             Text(
                 text = "▶ Weiterschauen",
-                color = fg.copy(alpha = 0.7f),
+                color = MaterialTheme.colorScheme.tertiary,
                 style = MaterialTheme.typography.bodySmall
             )
         }

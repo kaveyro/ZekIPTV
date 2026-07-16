@@ -26,7 +26,7 @@ class MainActivity : ComponentActivity() {
                 "system" -> isSystemInDarkTheme()
                 else -> true // "dark" ist der TV-Standard
             }
-            IptvTheme(darkTheme = darkTheme, dynamicColor = false) {
+            IptvTheme(darkTheme = darkTheme) {
                 Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
                     IptvApp(mainViewModel)
                 }
@@ -41,7 +41,6 @@ fun IptvApp(mainViewModel: MainViewModel = viewModel()) {
     val vodMedia by mainViewModel.playingMedia
     val selectedVod by mainViewModel.selectedVod
     val selectedSeries by mainViewModel.selectedSeries
-    val showSettings by mainViewModel.showSettings
 
     // Live-Sender oder VOD/Episode — beides läuft im selben Player.
     val channel = selectedChannel
@@ -50,6 +49,7 @@ fun IptvApp(mainViewModel: MainViewModel = viewModel()) {
     when {
         media != null -> VideoPlayer(
             media = media,
+            mainViewModel = mainViewModel,
             nowPlaying = if (media.isLive) channel?.let { mainViewModel.epgFor(it).now } else null,
             resumeMs = mainViewModel.resumeFor(media.url),
             sleepMinutes = mainViewModel.sleepTimerMinutes.value,
@@ -61,15 +61,14 @@ fun IptvApp(mainViewModel: MainViewModel = viewModel()) {
                 { mainViewModel.swapToPreviousChannel() }
             } else null,
             onCycleSleep = { mainViewModel.cycleSleepTimer() },
-            onSaveResume = { url, position -> mainViewModel.saveResume(url, position) }
+            onSaveResume = { url, position, duration -> mainViewModel.saveResume(url, position, duration) }
         )
 
         selectedVod != null -> VodDetailScreen(mainViewModel)
 
         selectedSeries != null -> EpisodesScreen(mainViewModel)
 
-        showSettings -> SettingsScreen(mainViewModel)
-
+        // MainScreen ist die Shell: Navigations-Rail links + aktiver Bereich rechts.
         else -> MainScreen(mainViewModel)
     }
 }

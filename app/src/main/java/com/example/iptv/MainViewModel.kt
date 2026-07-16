@@ -20,11 +20,23 @@ sealed interface PlaylistUiState {
     data class Error(val message: String) : PlaylistUiState
 }
 
-/** Inhalts-Tabs: Live-TV (aus der M3U) sowie Filme/Serien (über die Xtream-API). */
-enum class ContentTab { LIVE, MOVIES, SERIES }
+/** Ziel-Bereiche der linken Navigations-Rail. */
+enum class NavDestination { SEARCH, HOME, LIVE, MOVIES, SERIES, SETTINGS }
 
 /** "Jetzt läuft"-Info eines Senders: aktueller/nächster Titel + Fortschritt (0..1). */
 data class EpgNowNext(val now: String?, val next: String?, val progress: Float?)
+
+/** Eintrag der "Weiter schauen"-Reihe auf dem Home-Bildschirm. */
+data class ContinueWatchingItem(
+    val url: String,
+    val title: String,
+    val poster: String?,
+    val positionMs: Long,
+    val durationMs: Long
+) {
+    /** Fortschritt 0..1, sofern die Gesamtdauer bekannt ist. */
+    val progress: Float? get() = if (durationMs > 0) (positionMs.toFloat() / durationMs).coerceIn(0f, 1f) else null
+}
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
 
@@ -38,9 +50,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val selectedChannel = mutableStateOf<Channel?>(null)
     val favorites = mutableStateOf<Set<String>>(emptySet())
 
-    // Navigation
-    val showSettings = mutableStateOf(false)
-    val contentTab = mutableStateOf(ContentTab.LIVE)
+    // Navigation (linke Rail)
+    val currentDestination = mutableStateOf(NavDestination.HOME)
 
     // Einstellungen
     val playlists = mutableStateOf<List<PlaylistEntry>>(emptyList())
@@ -78,6 +89,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     // Wiedergabe (VOD/Episoden; Live läuft über selectedChannel)
     val playingMedia = mutableStateOf<PlayingMedia?>(null)
     val resumePositions = mutableStateOf<Map<String, Long>>(emptyMap())
+
+    // Home: zuletzt gesehene Sender (URLs, neueste zuerst) + Metadaten angefangener Streams
+    private val recentChannelUrls = mutableStateOf<List<String>>(emptyList())
+    private val watchMeta = mutableStateOf<Map<String, WatchMeta>>(emptyMap())
     val sleepTimerMinutes = mutableStateOf<Int?>(null)
     private var sleepJob: Job? = null
 
@@ -144,6 +159,36 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 else -> item.categoryId == category
             }
         }
+    }
+
+    // ---------- Home-Reihen ----------
+
+    /** Zuletzt gesehene Sender (gegen die geladene Playlist aufgelöst). */
+    val recentChannels: State<List<Channel>> = derivedStateOf {
+        val byUrl = allChannels.value.associateBy { it.url }
+        recentChannelUrls.value.mapNotNull { byUrl[it] }
+    }
+
+    /** Favorisierte Sender (für die Home-Reihe; VOD/Serien-Favoriten laufen über die Tabs). */
+    val favoriteChannels: State<List<Channel>> = derivedStateOf {
+        allChannels.value.filter { it.url in favorites.value }.distinctBy { it.url }
+    }
+
+    /** Angefangene Filme/Episoden: Resume-Position vorhanden + Metadaten bekannt. */
+    val continueWatching: State<List<ContinueWatchingItem>> = derivedStateOf {
+        val resumes = resumePositions.value
+        watchMeta.value.entries
+            .filter { (url, _) -> (resumes[url] ?: 0L) > 10_000 }
+            .sortedByDescending { it.value.ts }
+            .take(15)
+            .map { (url, meta) ->
+                ContinueWatchingItem(url, meta.title, meta.poster, resumes[url] ?: 0L, meta.durationMs)
+            }
+    }
+
+    /** Startet einen angefangenen Titel erneut — der Player setzt über resumeFor() automatisch fort. */
+    fun playContinueWatching(item: ContinueWatchingItem) {
+        playingMedia.value = PlayingMedia(item.url, item.title, isLive = false)
     }
 
     // ---------- Globale Suche (über Live + Filme + Serien, ignoriert Kategorien) ----------
@@ -213,6 +258,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             repository.favoritesFlow.collect { favorites.value = it }
         }
+        // Home-Reihen laufend beobachten (zuletzt gesehen / weiter schauen).
+        viewModelScope.launch {
+            repository.recentChannelsFlow.collect { recentChannelUrls.value = it }
+        }
+        viewModelScope.launch {
+            repository.watchMetaFlow.collect { watchMeta.value = it }
+        }
         // Minuten-Ticker für "Jetzt läuft"/Fortschrittsbalken.
         viewModelScope.launch {
             while (true) {
@@ -239,6 +291,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         selectedGroup.value = group
     }
 
+    /** Kanäle einer Gruppe (für die Senderlisten-Overlay im Player, unabhängig vom globalen Filter). */
+    fun channelsForGroup(group: String?): List<Channel> = when (group) {
+        null -> allChannels.value
+        FAVORITES_GROUP -> allChannels.value.filter { it.url in favorites.value }
+        else -> allChannels.value.filter { it.group == group }
+    }
+
     fun setThemeMode(mode: String) {
         themeMode.value = mode
         viewModelScope.launch { repository.saveTheme(mode) }
@@ -249,15 +308,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { repository.saveAutoplay(enabled) }
     }
 
-    // ---------- Tabs / Xtream-Inhalte ----------
+    // ---------- Navigation / Xtream-Inhalte ----------
 
-    fun selectTab(tab: ContentTab) {
-        contentTab.value = tab
-        searchQuery.value = ""
-        when (tab) {
-            ContentTab.MOVIES -> if (vodItems.value.isEmpty()) loadVod()
-            ContentTab.SERIES -> if (seriesItems.value.isEmpty()) loadSeries()
-            ContentTab.LIVE -> Unit
+    fun navigate(dest: NavDestination) {
+        currentDestination.value = dest
+        if (dest != NavDestination.SEARCH) searchQuery.value = ""
+        when (dest) {
+            NavDestination.MOVIES -> if (vodItems.value.isEmpty()) loadVod()
+            NavDestination.SERIES -> if (seriesItems.value.isEmpty()) loadSeries()
+            else -> Unit
         }
     }
 
@@ -265,7 +324,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val account = detectXtream(playlistUrl)
         xtream = account?.let { XtreamApi(it) }
         xtreamAvailable.value = xtream != null
-        if (xtream == null) contentTab.value = ContentTab.LIVE
+        // Ohne Xtream gibt es keine Filme/Serien-Bereiche mehr — ggf. dorthin navigierte Nutzer umleiten.
+        if (xtream == null && currentDestination.value in setOf(NavDestination.MOVIES, NavDestination.SERIES)) {
+            currentDestination.value = NavDestination.HOME
+        }
         // Anbieter-EPG automatisch als Quelle ergänzen: dessen Kanal-IDs matchen die Playlist exakt.
         if (autoAddEpg) {
             xtream?.epgUrl()?.let { epg -> if (epg !in epgSources.value) addEpgSource(epg) }
@@ -353,14 +415,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun playVod(item: VodItem) {
         val api = xtream ?: return
-        playingMedia.value = PlayingMedia(api.vodStreamUrl(item), item.name, isLive = false)
+        val streamUrl = api.vodStreamUrl(item)
+        playingMedia.value = PlayingMedia(streamUrl, item.name, isLive = false)
+        // Titel/Poster für die "Weiter schauen"-Reihe merken.
+        viewModelScope.launch { repository.saveWatchMeta(streamUrl, item.name, item.icon) }
     }
 
     fun playEpisode(episode: SeriesEpisode) {
         val api = xtream ?: return
         val seriesName = selectedSeries.value?.name ?: ""
         val title = "%s S%02dE%02d – %s".format(seriesName, episode.season, episode.episode, episode.title)
-        playingMedia.value = PlayingMedia(api.episodeStreamUrl(episode), title, isLive = false)
+        val streamUrl = api.episodeStreamUrl(episode)
+        playingMedia.value = PlayingMedia(streamUrl, title, isLive = false)
+        viewModelScope.launch { repository.saveWatchMeta(streamUrl, title, selectedSeries.value?.cover) }
     }
 
     fun stopPlayback() {
@@ -369,11 +436,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         pendingListFocus.value = true
     }
 
-    fun saveResume(url: String, positionMs: Long) {
+    fun saveResume(url: String, positionMs: Long, durationMs: Long = 0L) {
         resumePositions.value = resumePositions.value.toMutableMap().apply {
             if (positionMs > 0) put(url, positionMs) else remove(url)
         }
-        viewModelScope.launch { repository.saveResumePosition(url, positionMs) }
+        viewModelScope.launch {
+            repository.saveResumePosition(url, positionMs)
+            // Gesamtdauer nachtragen — erst der Player kennt sie (für den Fortschrittsbalken).
+            repository.updateWatchDuration(url, durationMs)
+        }
     }
 
     fun resumeFor(url: String): Long = resumePositions.value[url] ?: 0L
@@ -517,7 +588,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         seriesItems.value = emptyList()
                         selectedVodCategory.value = null
                         selectedSeriesCategory.value = null
-                        contentTab.value = ContentTab.LIVE
                         setupXtream(target, autoAddEpg = true)
                         repository.saveUrl(target)
                         repository.saveChannels(channels)
@@ -536,7 +606,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // Für den Sender-Rücksprung den bisher laufenden Sender merken.
         selectedChannel.value?.takeIf { it.url != channel.url }?.let { previousChannel = it }
         selectedChannel.value = channel
-        viewModelScope.launch { repository.saveLastChannel(channel.url) }
+        viewModelScope.launch {
+            repository.saveLastChannel(channel.url)
+            repository.addRecentChannel(channel.url)
+        }
     }
 
     /** Springt zum zuvor gesehenen Sender zurück (klassische "letzter Sender"-Taste). */

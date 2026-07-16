@@ -25,8 +25,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
@@ -47,6 +46,7 @@ import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.PlayerView
+import com.example.iptv.ui.tvFocusFrame
 import kotlinx.coroutines.delay
 
 private const val MAX_RECONNECT_ATTEMPTS = 5
@@ -55,6 +55,7 @@ private const val MAX_RECONNECT_ATTEMPTS = 5
 @Composable
 fun VideoPlayer(
     media: PlayingMedia,
+    mainViewModel: MainViewModel,
     nowPlaying: String?,
     resumeMs: Long,
     sleepMinutes: Int?,
@@ -62,7 +63,7 @@ fun VideoPlayer(
     onZap: ((Int) -> Unit)?,
     onSwapLast: (() -> Unit)?,
     onCycleSleep: () -> Unit,
-    onSaveResume: (String, Long) -> Unit
+    onSaveResume: (String, Long, Long) -> Unit
 ) {
     val context = LocalContext.current
     // Immer die aktuellen Referenzen verwenden (factory/Listener laufen nur einmal).
@@ -72,6 +73,9 @@ fun VideoPlayer(
     val currentOnSaveResume by rememberUpdatedState(onSaveResume)
 
     var showMenu by remember { mutableStateOf(false) }
+    // Senderlisten-Overlay (DPAD-LINKS bei Live): als MutableState, damit die einmalig
+    // laufende View-Factory und der Visibility-Listener stets den aktuellen Wert sehen.
+    val showChannelList = remember { mutableStateOf(false) }
     // Referenz auf die PlayerView, um den Tasten-Fokus nach Dialog/Steuerleiste zurückzuholen.
     var playerViewRef by remember { mutableStateOf<PlayerView?>(null) }
     // Auto-Reconnect: Live-Streams reißen gern ab; mit Backoff neu verbinden.
@@ -194,11 +198,24 @@ fun VideoPlayer(
                         // ALLE DPAD-Tasten gehen bewusst an die Standard-Steuerleiste, damit
                         // OK = Pause/Steuerleiste, Pfeile = navigieren usw. zuverlässig bleiben.
                         // (Zappen/Rücksprung laufen konfliktfrei über das MENÜ.)
+                        // Solange die Senderliste offen ist, alle LEFT-Events schlucken — sonst
+                        // zeigt das ACTION_UP des öffnenden Tastendrucks die Steuerleiste an.
+                        if (event.keyCode == KeyEvent.KEYCODE_DPAD_LEFT && showChannelList.value) {
+                            return true
+                        }
                         if (event.action == KeyEvent.ACTION_DOWN) {
                             when (event.keyCode) {
                                 KeyEvent.KEYCODE_MENU -> {
                                     showMenu = true
                                     return true
+                                }
+                                KeyEvent.KEYCODE_DPAD_LEFT -> {
+                                    // LINKS öffnet die Senderliste — nur bei Live und nur solange
+                                    // die Steuerleiste unsichtbar ist (dort behält LINKS = Spulen).
+                                    if (currentMedia.isLive && !isControllerFullyVisible && !showChannelList.value) {
+                                        showChannelList.value = true
+                                        return true
+                                    }
                                 }
                                 KeyEvent.KEYCODE_CHANNEL_UP -> {
                                     currentOnZap?.let { it(+1); return true }
@@ -228,7 +245,11 @@ fun VideoPlayer(
                     // Fokus deshalb zurück auf die PlayerView holen.
                     setControllerVisibilityListener(
                         PlayerView.ControllerVisibilityListener { visibility ->
-                            if (visibility != android.view.View.VISIBLE) requestFocus()
+                            // Nicht den Fokus an sich reißen, solange das Senderlisten-Overlay
+                            // offen ist — sonst verliert dessen Liste die D-Pad-Steuerung.
+                            if (visibility != android.view.View.VISIBLE && !showChannelList.value) {
+                                requestFocus()
+                            }
                         }
                     )
                     playerViewRef = this
@@ -238,13 +259,17 @@ fun VideoPlayer(
         )
 
         if (overlayVisible || reconnectAttempt > 0 || playerError != null) {
+            // Scrim-Verlauf von oben statt flacher schwarzer Box — kinoartiger Look.
             Column(
                 modifier = Modifier
                     .align(Alignment.TopStart)
-                    .padding(32.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(Color.Black.copy(alpha = 0.6f))
-                    .padding(horizontal = 20.dp, vertical = 10.dp)
+                    .fillMaxWidth()
+                    .background(
+                        Brush.verticalGradient(
+                            colors = listOf(Color.Black.copy(alpha = 0.78f), Color.Transparent)
+                        )
+                    )
+                    .padding(horizontal = 40.dp, vertical = 28.dp)
             ) {
                 Text(
                     text = media.title,
@@ -283,6 +308,20 @@ fun VideoPlayer(
             }
         }
 
+        // Senderliste als Overlay (nur Live): Zappen ohne den Player zu verlassen.
+        if (media.isLive) {
+            PlayerChannelOverlay(
+                visible = showChannelList.value,
+                mainViewModel = mainViewModel,
+                currentUrl = media.url,
+                onDismiss = {
+                    showChannelList.value = false
+                    // Fokus zurück zur PlayerView, damit MENÜ/LINKS/Steuerleiste weiter reagieren.
+                    playerViewRef?.requestFocus()
+                }
+            )
+        }
+
         if (showMenu) {
             PlayerMenuDialog(
                 exoPlayer = exoPlayer,
@@ -301,12 +340,12 @@ fun VideoPlayer(
 }
 
 /** Position eines VOD-Titels sichern; kurz vor dem Ende zurücksetzen ("fertig gesehen"). */
-private fun saveVodPosition(player: ExoPlayer, media: PlayingMedia, save: (String, Long) -> Unit) {
+private fun saveVodPosition(player: ExoPlayer, media: PlayingMedia, save: (String, Long, Long) -> Unit) {
     if (media.isLive) return
     val duration = player.duration
     val position = player.currentPosition
     val effective = if (duration > 0 && position > duration - 60_000) 0L else position
-    save(media.url, effective)
+    save(media.url, effective, if (duration > 0) duration else 0L)
 }
 
 /** Wiedergabe-Menü (MENÜ-Taste): Tonspur-Auswahl und Sleep-Timer, D-Pad-bedienbar. */
@@ -429,19 +468,17 @@ private fun PlayerMenuDialog(
 @kotlin.OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun MenuRow(label: String, onClick: () -> Unit) {
-    var focused by remember { mutableStateOf(false) }
     Text(
         text = label,
-        color = if (focused) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+        color = MaterialTheme.colorScheme.onSurface,
         style = MaterialTheme.typography.titleMedium,
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 2.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .onFocusChanged { focused = it.isFocused }
-            .combinedClickable(onClick = onClick)
-            .background(
-                if (focused) MaterialTheme.colorScheme.primary else Color.Transparent
+            .tvFocusFrame(
+                onClick = onClick,
+                shape = RoundedCornerShape(8.dp),
+                restColor = Color.Transparent
             )
             .padding(horizontal = 12.dp, vertical = 10.dp)
     )
