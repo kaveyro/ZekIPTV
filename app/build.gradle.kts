@@ -3,6 +3,7 @@ import java.util.Properties
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+    id("org.jetbrains.kotlin.plugin.compose")
 }
 
 // Signierdaten liegen gitignoriert in keystore/keystore.properties (nicht committen!).
@@ -12,11 +13,11 @@ val keystoreProperties = Properties().apply {
 }
 
 android {
-    namespace = "com.example.iptv"
+    namespace = "com.zekikoese"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.example.iptv"
+        applicationId = "com.zekikoese"
         minSdk = 24
         targetSdk = 34
         versionCode = 5
@@ -61,9 +62,6 @@ android {
     }
     buildFeatures {
         compose = true
-    }
-    composeOptions {
-        kotlinCompilerExtensionVersion = "1.5.14"
     }
     packaging {
         resources {
