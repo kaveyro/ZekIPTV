@@ -130,6 +130,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val pendingSeriesFocus = mutableStateOf(false)
     val pendingHomeFocus = mutableStateOf(true) // App-Start: Fokus auf den Inhalt statt auf die Rail
 
+    // Immersiver Hintergrund: URL des aktuell fokussierten Elements (Logo/Poster).
+    val focusedBackdrop = mutableStateOf<String?>(null)
+
     /** Gruppen für die Kategorie-Auswahl: "★ Favoriten" (falls vorhanden) + group-title-Werte. */
     val groups: State<List<String>> = derivedStateOf {
         buildList {
@@ -415,6 +418,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun navigate(dest: NavDestination) {
         currentDestination.value = dest
         if (dest != NavDestination.SEARCH) searchQuery.value = ""
+        // Backdrop zurücksetzen beim Bereichswechsel.
+        focusedBackdrop.value = null
+
         // Nach OK auf der Rail den Fokus direkt in den Inhalt setzen (statt auf der Rail zu bleiben).
         when (dest) {
             NavDestination.HOME -> pendingHomeFocus.value = true

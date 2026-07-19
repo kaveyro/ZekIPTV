@@ -17,15 +17,14 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
@@ -129,26 +128,31 @@ fun VodDetailScreen(mainViewModel: MainViewModel) {
 
             // Aktionen
             Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                Button(onClick = { mainViewModel.playVod(vod) }) {
-                    Text(
-                        if (resumeMs > 10_000) {
-                            "▶ Fortsetzen (${resumeMs / 60_000} min)"
-                        } else {
-                            "▶ Abspielen"
-                        }
+                TvButton(
+                    text = if (resumeMs > 10_000) "▶ Fortsetzen (${resumeMs / 60_000} min)" else "▶ Abspielen",
+                    onClick = { mainViewModel.playVod(vod) }
+                )
+
+                if (resumeMs > 10_000 && vodUrl != null) {
+                    TvButton(
+                        text = "Von vorn",
+                        onClick = {
+                            mainViewModel.saveResume(vodUrl, 0)
+                            mainViewModel.playVod(vod)
+                        },
+                        containerColor = Color.Transparent,
+                        contentColor = MaterialTheme.colorScheme.onSurface,
+                        borderColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
                     )
                 }
-                if (resumeMs > 10_000 && vodUrl != null) {
-                    OutlinedButton(onClick = {
-                        mainViewModel.saveResume(vodUrl, 0)
-                        mainViewModel.playVod(vod)
-                    }) {
-                        Text("Von vorn")
-                    }
-                }
-                OutlinedButton(onClick = { mainViewModel.toggleVodFavorite(vod) }) {
-                    Text(if (isFavorite) "★ Favorit" else "☆ Favorit")
-                }
+
+                TvButton(
+                    text = if (isFavorite) "★ Favorit" else "☆ Favorit",
+                    onClick = { mainViewModel.toggleVodFavorite(vod) },
+                    containerColor = Color.Transparent,
+                    contentColor = if (isFavorite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                    borderColor = if (isFavorite) MaterialTheme.colorScheme.primary.copy(alpha = 0.6f) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                )
             }
 
             Spacer(Modifier.height(20.dp))
@@ -239,26 +243,31 @@ private fun PhoneVodDetailContent(
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            Button(onClick = { mainViewModel.playVod(vod) }) {
-                Text(
-                    if (resumeMs > 10_000) {
-                        "▶ Fortsetzen (${resumeMs / 60_000} min)"
-                    } else {
-                        "▶ Abspielen"
-                    }
+            TvButton(
+                text = if (resumeMs > 10_000) "▶ Fortsetzen (${resumeMs / 60_000} min)" else "▶ Abspielen",
+                onClick = { mainViewModel.playVod(vod) }
+            )
+
+            if (resumeMs > 10_000 && vodUrl != null) {
+                TvButton(
+                    text = "Von vorn",
+                    onClick = {
+                        mainViewModel.saveResume(vodUrl, 0)
+                        mainViewModel.playVod(vod)
+                    },
+                    containerColor = Color.Transparent,
+                    contentColor = MaterialTheme.colorScheme.onSurface,
+                    borderColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
                 )
             }
-            if (resumeMs > 10_000 && vodUrl != null) {
-                OutlinedButton(onClick = {
-                    mainViewModel.saveResume(vodUrl, 0)
-                    mainViewModel.playVod(vod)
-                }) {
-                    Text("Von vorn")
-                }
-            }
-            OutlinedButton(onClick = { mainViewModel.toggleVodFavorite(vod) }) {
-                Text(if (isFavorite) "★ Favorit" else "☆ Favorit")
-            }
+
+            TvButton(
+                text = if (isFavorite) "★ Favorit" else "☆ Favorit",
+                onClick = { mainViewModel.toggleVodFavorite(vod) },
+                containerColor = Color.Transparent,
+                contentColor = if (isFavorite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                borderColor = if (isFavorite) MaterialTheme.colorScheme.primary.copy(alpha = 0.6f) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+            )
         }
 
         Spacer(Modifier.height(16.dp))

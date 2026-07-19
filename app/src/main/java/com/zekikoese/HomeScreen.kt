@@ -17,6 +17,8 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Home
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -102,17 +104,15 @@ fun HomeScreen(
         ScreenTitle("Home")
 
         if (!hasRows) {
-            Box(modifier = Modifier.fillMaxWidth().padding(top = 120.dp)) {
-                Text(
-                    text = if (hasChannels) {
-                        "Gesehene Sender, Favoriten und angefangene Filme erscheinen hier."
-                    } else {
-                        "Willkommen! Über das Menü links unter „Einstellungen“ eine Playlist hinzufügen."
-                    },
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.align(Alignment.Center)
-                )
-            }
+            EmptyState(
+                icon = Icons.Filled.Home,
+                title = "Willkommen bei ZekIPTV",
+                subtitle = if (hasChannels) {
+                    "Gesehene Sender, Favoriten und angefangene Filme erscheinen hier."
+                } else {
+                    "Gehe zu den Einstellungen, um deine erste Playlist hinzuzufügen."
+                }
+            )
             return@Column
         }
 
@@ -122,15 +122,17 @@ fun HomeScreen(
                 itemsIndexed(continueWatching) { index, item ->
                     ContinueWatchingCard(
                         item = item,
-                        modifier = if (index == 0) Modifier.focusRequester(firstCardFocus) else Modifier
+                        modifier = if (index == 0) Modifier.focusRequester(firstCardFocus) else Modifier,
+                        onFocusChange = { focused ->
+                            if (focused) mainViewModel.focusedBackdrop.value = item.poster
+                        }
                     ) { mainViewModel.playContinueWatching(item) }
                 }
             }
             Spacer(Modifier.height(28.dp))
         }
 
-        // ★ Favoriten als kompakte Karten-Reihe VOR der Liste — sonst rutschen sie unter
-        // die (bis zu 15 Zeilen lange) "Zuletzt gesehen"-Liste.
+        // ★ Favoriten als kompakte Karten-Reihe VOR der Liste
         if (favoriteChannels.isNotEmpty()) {
             HomeRowTitle("★ Favoriten")
             LazyRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -143,16 +145,19 @@ fun HomeScreen(
                         } else Modifier,
                         onClick = { mainViewModel.selectChannel(channel) },
                         onLongClick = { onChannelLongPress(channel) },
-                        onFocusChange = { focused -> if (focused) focusedChannel = channel }
+                        onFocusChange = { focused ->
+                            if (focused) {
+                                focusedChannel = channel
+                                mainViewModel.focusedBackdrop.value = channel.logo
+                            }
+                        }
                     )
                 }
             }
             Spacer(Modifier.height(28.dp))
         }
 
-        // Zuletzt gesehene Sender als vertikale Liste wie in Live-TV (Logo + Jetzt/Gleich +
-        // Fortschritt). Bewusst eine normale Column: max. 15 Einträge, und eine LazyColumn
-        // wäre im umgebenden verticalScroll nicht erlaubt.
+        // Zuletzt gesehene Sender
         if (recentChannels.isNotEmpty()) {
             HomeRowTitle("Zuletzt gesehen")
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -161,12 +166,18 @@ fun HomeScreen(
                         channel = channel,
                         isFavorite = channel.url in favorites,
                         epg = mainViewModel.epgFor(channel),
+                        showGroup = true,
                         modifier = if (index == 0 && continueWatching.isEmpty() && favoriteChannels.isEmpty()) {
                             Modifier.focusRequester(firstCardFocus)
                         } else Modifier,
                         onClick = { mainViewModel.selectChannel(channel) },
                         onLongClick = { onChannelLongPress(channel) },
-                        onFocusChange = { focused -> if (focused) focusedChannel = channel }
+                        onFocusChange = { focused ->
+                            if (focused) {
+                                focusedChannel = channel
+                                mainViewModel.focusedBackdrop.value = channel.logo
+                            }
+                        }
                     )
                 }
             }
@@ -189,6 +200,7 @@ private fun HomeRowTitle(title: String) {
 private fun ContinueWatchingCard(
     item: ContinueWatchingItem,
     modifier: Modifier = Modifier,
+    onFocusChange: ((Boolean) -> Unit)? = null,
     onClick: () -> Unit
 ) {
     Column(
@@ -198,6 +210,7 @@ private fun ContinueWatchingCard(
                 onClick = onClick,
                 focusedScale = 1.08f,
                 restColor = Color.Transparent,
+                onFocusChange = onFocusChange,
                 // Platz für die Vergrößerung: verhindert Abschneiden an den Reihen-Rändern.
                 focusRoom = 10.dp
             )

@@ -31,6 +31,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -45,6 +46,9 @@ fun EpisodesScreen(mainViewModel: MainViewModel) {
     val episodes by mainViewModel.seriesEpisodes
     val contentInfo by mainViewModel.contentInfo
     val resumePositions by mainViewModel.resumePositions
+    val favorites by mainViewModel.favorites
+
+    val isFavorite = series?.let { mainViewModel.seriesFavKey(it) in favorites } ?: false
 
     // Zurück-Taste schließt die Episodenliste.
     BackHandler { mainViewModel.closeSeries() }
@@ -85,13 +89,24 @@ fun EpisodesScreen(mainViewModel: MainViewModel) {
                 )
                 Spacer(Modifier.width(20.dp))
             }
-            Text(
-                text = series?.name ?: "Serie",
-                style = MaterialTheme.typography.displaySmall,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f)
-            )
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = series?.name ?: "Serie",
+                    style = MaterialTheme.typography.displaySmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                if (series != null) {
+                    Spacer(Modifier.height(8.dp))
+                    TvButton(
+                        text = if (isFavorite) "★ Favorit" else "☆ Favorit",
+                        onClick = { mainViewModel.toggleSeriesFavorite(series!!) },
+                        containerColor = Color.Transparent,
+                        contentColor = if (isFavorite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                        borderColor = if (isFavorite) MaterialTheme.colorScheme.primary.copy(alpha = 0.6f) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                    )
+                }
+            }
         }
 
         // Metadaten + Beschreibung der Serie (aus dem Anbieter-Katalog)

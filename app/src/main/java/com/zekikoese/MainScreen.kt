@@ -5,8 +5,14 @@ import android.speech.RecognizerIntent
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.ExperimentalSharedTransitionApi
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -33,6 +39,9 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -48,12 +57,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
@@ -75,10 +86,6 @@ import kotlinx.coroutines.android.awaitFrame
 /** Sprungweite (Einträge) beim Blättern mit den Vor-/Zurückspulen-Tasten in langen Listen. */
 private const val PAGE_JUMP = 10
 
-/**
- * App-Shell: linke Navigations-Rail + aktiver Bereich (Suche/Home/Live/Filme/Serien/Einstellungen).
- * Player, Film-Detail und Episodenliste laufen als Vollbild außerhalb dieser Shell (siehe IptvApp).
- */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun MainScreen(mainViewModel: MainViewModel = viewModel()) {
@@ -92,47 +99,40 @@ fun MainScreen(mainViewModel: MainViewModel = viewModel()) {
 
     var actionsChannel by remember { mutableStateOf<Channel?>(null) }
 
-    // BACK: erst Filter im aktuellen Bereich zurücksetzen, dann zu Home, erst von dort die App beenden.
     BackHandler(enabled = destination != NavDestination.HOME) {
         when {
             destination == NavDestination.LIVE && selectedGroup != null ->
                 mainViewModel.selectGroup(null)
-
             destination == NavDestination.MOVIES && vodCategory != null ->
                 mainViewModel.selectVodCategory(null)
-
             destination == NavDestination.SERIES && seriesCategory != null ->
                 mainViewModel.selectSeriesCategory(null)
-
             destination == NavDestination.SEARCH && search.isNotEmpty() ->
                 mainViewModel.onSearchChange("")
-
             else -> mainViewModel.navigate(NavDestination.HOME)
         }
     }
 
-    // Aktiver Bereich — identisch für TV- und Smartphone-Shell.
     val mainContent: @Composable () -> Unit = {
-        when (destination) {
-            NavDestination.SEARCH -> SearchScreen(mainViewModel) { actionsChannel = it }
-            NavDestination.HOME -> HomeScreen(mainViewModel) { actionsChannel = it }
-            NavDestination.LIVE -> LiveScreen(mainViewModel) { actionsChannel = it }
-            NavDestination.MOVIES -> VodContent(mainViewModel)
-            NavDestination.SERIES -> SeriesContent(mainViewModel)
-            NavDestination.SETTINGS -> SettingsScreen(mainViewModel)
+        AnimatedContent(
+            targetState = destination,
+            transitionSpec = { fadeIn() togetherWith fadeOut() },
+            label = "destinationTransition"
+        ) { dest ->
+            when (dest) {
+                NavDestination.SEARCH -> SearchScreen(mainViewModel) { actionsChannel = it }
+                NavDestination.HOME -> HomeScreen(mainViewModel) { actionsChannel = it }
+                NavDestination.LIVE -> LiveScreen(mainViewModel) { actionsChannel = it }
+                NavDestination.MOVIES -> VodContent(mainViewModel)
+                NavDestination.SERIES -> SeriesContent(mainViewModel)
+                NavDestination.SETTINGS -> SettingsScreen(mainViewModel)
+            }
         }
     }
 
     if (LocalIsTv.current) {
-        // TV-Shell: Navigations-Rail als Overlay links.
-        // Der Inhalt hat einen festen Offset (Breite der eingeklappten Rail),
-        // die Rail schwebt darüber und verschiebt den Inhalt beim Ausklappen nicht mehr.
         Box(modifier = Modifier.fillMaxSize()) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(start = 72.dp)
-            ) {
+            Box(modifier = Modifier.fillMaxSize().padding(start = 72.dp)) {
                 mainContent()
             }
             NavRail(
@@ -142,13 +142,11 @@ fun MainScreen(mainViewModel: MainViewModel = viewModel()) {
             )
         }
     } else {
-        // Smartphone-Shell: untere Navigationsleiste (Touch).
         PhoneMainScreen(mainViewModel) {
             mainContent()
         }
     }
 
-    // Lang-Druck-Menü eines Senders (Tagesprogramm / Favorit)
     val dialogChannel = actionsChannel
     if (dialogChannel != null) {
         ChannelActionsDialog(
@@ -164,19 +162,16 @@ fun MainScreen(mainViewModel: MainViewModel = viewModel()) {
         )
     }
 
-    // Tagesprogramm-Ansicht
     val epgDialogChannel by mainViewModel.epgChannel
-    val epgChannelValue = epgDialogChannel
-    if (epgChannelValue != null) {
+    if (epgDialogChannel != null) {
         EpgDayDialog(
-            channelName = epgChannelValue.name,
-            programmes = mainViewModel.programmesFor(epgChannelValue),
+            channelName = epgDialogChannel!!.name,
+            programmes = mainViewModel.programmesFor(epgDialogChannel!!),
             onDismiss = { mainViewModel.closeEpg() }
         )
     }
 }
 
-/** Einheitlicher Bereichs-Titel oben in jedem Destination-Screen. */
 @Composable
 internal fun ScreenTitle(title: String) {
     Text(
@@ -185,8 +180,6 @@ internal fun ScreenTitle(title: String) {
         modifier = Modifier.padding(bottom = 16.dp)
     )
 }
-
-// ---------- Suche ----------
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -197,8 +190,6 @@ private fun SearchScreen(
     val search by mainViewModel.searchQuery
     val history by mainViewModel.searchHistory
     val focusManager = LocalFocusManager.current
-    // Compose-Textfelder konsumieren DPAD-Tasten für die Cursor-Steuerung und werden so
-    // zur Fokus-Falle für die Fernbedienung. DPAD_DOWN reicht den Fokus explizit weiter.
     val escapeDownOnDpad = Modifier.onPreviewKeyEvent { event ->
         if (event.type == KeyEventType.KeyDown && event.key == Key.DirectionDown) {
             focusManager.moveFocus(FocusDirection.Down)
@@ -208,7 +199,6 @@ private fun SearchScreen(
         }
     }
 
-    // Sprachsuche über das Mikrofon der Fernbedienung (falls das System sie anbietet).
     val voiceLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -254,20 +244,148 @@ private fun SearchScreen(
                     }
                 }
             }
-            Box(modifier = Modifier.fillMaxSize()) {
-                Text(
-                    text = "Suchbegriff eingeben — durchsucht Live-TV, Filme und Serien.",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.align(Alignment.Center)
-                )
-            }
+            EmptyState(
+                icon = Icons.Filled.Info,
+                title = "Suchbegriff eingeben",
+                subtitle = "Durchsucht Live-TV, Filme und Serien."
+            )
         } else {
             SearchResults(mainViewModel, onChannelLongPress)
         }
     }
 }
 
-// ---------- Live-TV ----------
+@Composable
+fun EmptyState(
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier.fillMaxWidth().padding(top = 80.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.25f),
+            modifier = Modifier.size(100.dp)
+        )
+        Spacer(Modifier.height(24.dp))
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleLarge,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f)
+        )
+        Spacer(Modifier.height(8.dp))
+        Text(
+            text = subtitle,
+            style = MaterialTheme.typography.bodyMedium,
+            textAlign = TextAlign.Center,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 48.dp)
+        )
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun SearchResults(
+    mainViewModel: MainViewModel,
+    onChannelLongPress: (Channel) -> Unit
+) {
+    val channels by mainViewModel.searchChannels
+    val vod by mainViewModel.searchVod
+    val series by mainViewModel.searchSeries
+    val favorites by mainViewModel.favorites
+
+    if (channels.isEmpty() && vod.isEmpty() && series.isEmpty()) {
+        EmptyState(
+            icon = Icons.Filled.Search,
+            title = "Keine Treffer",
+            subtitle = "Versuche es mit einem anderen Suchbegriff."
+        )
+        return
+    }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        if (channels.isNotEmpty()) {
+            item { SearchSectionTitle("Sender (${channels.size})") }
+            items(channels, key = { "c" + it.url + it.name }) { channel ->
+                ChannelRow(
+                    channel = channel,
+                    isFavorite = channel.url in favorites,
+                    epg = mainViewModel.epgFor(channel),
+                    onClick = {
+                        mainViewModel.recordSearchQuery()
+                        mainViewModel.selectChannel(channel)
+                    },
+                    onLongClick = { onChannelLongPress(channel) }
+                )
+            }
+        }
+        if (vod.isNotEmpty()) {
+            item { SearchSectionTitle("Filme (${vod.size})") }
+            item {
+                FlowRow(
+                    maxItemsInEachRow = 5,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    vod.forEach { item ->
+                        PosterCard(
+                            title = item.name,
+                            icon = item.icon,
+                            isFavorite = mainViewModel.vodFavKey(item) in favorites,
+                            modifier = Modifier.width(160.dp),
+                            onClick = {
+                                mainViewModel.recordSearchQuery()
+                                mainViewModel.openVod(item)
+                            },
+                            onLongClick = { mainViewModel.toggleVodFavorite(item) },
+                            onFocusChange = { focused ->
+                                if (focused) mainViewModel.focusedBackdrop.value = item.icon
+                            }
+                        )
+                    }
+                }
+            }
+        }
+        if (series.isNotEmpty()) {
+            item { SearchSectionTitle("Serien (${series.size})") }
+            item {
+                FlowRow(
+                    maxItemsInEachRow = 5,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    series.forEach { item ->
+                        PosterCard(
+                            title = item.name,
+                            icon = item.cover,
+                            isFavorite = mainViewModel.seriesFavKey(item) in favorites,
+                            modifier = Modifier.width(160.dp),
+                            onClick = {
+                                mainViewModel.recordSearchQuery()
+                                mainViewModel.openSeries(item)
+                            },
+                            onLongClick = { mainViewModel.toggleSeriesFavorite(item) },
+                            onFocusChange = { focused ->
+                                if (focused) mainViewModel.focusedBackdrop.value = item.cover
+                            }
+                        )
+                    }
+                }
+            }
+        }
+        item { Spacer(Modifier.height(32.dp)) }
+    }
+}
 
 @Composable
 private fun LiveScreen(
@@ -289,15 +407,9 @@ private fun LiveScreen(
     val targetFocusIndex = mainViewModel.lastFocusedIndex.coerceIn(0, maxOf(0, channels.lastIndex))
     val pendingListFocus by mainViewModel.pendingListFocus
 
-    // Zuletzt fokussierter Listeneintrag — für die MENÜ-Taste (Aktionen) und FF/REW (Blättern).
     var focusedIndex by remember { mutableStateOf(0) }
     var focusedChannel by remember { mutableStateOf<Channel?>(null) }
 
-    // Fokus-Wiederherstellung bei Erstladung, Bereichswechsel, Rückkehr aus dem Player und
-    // FF/REW-Sprüngen (explizites Flag). Fokus mit Frame-Wiederholung anfordern, weil die
-    // Ziel-Zeile direkt nach scrollToItem u.U. noch nicht attached ist.
-    // Auf dem Smartphone nur die Scroll-Position wiederherstellen — programmatischer Fokus
-    // würde dort den TV-Fokusrahmen auf eine zufällige Zeile malen.
     LaunchedEffect(pendingListFocus, channels.size) {
         if (!pendingListFocus || channels.isEmpty()) return@LaunchedEffect
         listState.scrollToItem(targetFocusIndex)
@@ -315,14 +427,12 @@ private fun LiveScreen(
         mainViewModel.pendingListFocus.value = false
     }
 
-    // Seitenweises Blättern (Vor-/Zurückspulen-Tasten) über den Fokus-Wiederherstellungsweg.
     fun jumpBy(delta: Int) {
         if (channels.isEmpty()) return
         mainViewModel.lastFocusedIndex = (focusedIndex + delta).coerceIn(0, channels.lastIndex)
         mainViewModel.pendingListFocus.value = true
     }
 
-    // Kategorien: TV = Fokus-Spalte links, Smartphone = antippbarer Picker über der Liste.
     val categoryEntries = buildList {
         add(CategoryEntry(null, "Alle", allCount))
         groups.forEach { add(CategoryEntry(it, it, groupCounts[it])) }
@@ -341,15 +451,11 @@ private fun LiveScreen(
         }
 
         Row(modifier = Modifier.fillMaxSize()) {
-            // Kategorie-Spalte links: Filter greift beim Fokussieren, RECHTS/OK = Senderliste.
             if (isTv && groups.isNotEmpty()) {
                 CategoryColumn(
                     entries = categoryEntries,
                     selectedKey = selectedGroup,
                     onSelect = { group ->
-                        // Nutzer steuert die Kategorien: eine evtl. noch ausstehende
-                        // Fokus-Wiederherstellung verwerfen — sie würde den Fokus sonst
-                        // beim nächsten Listenwechsel aus der Spalte reißen.
                         mainViewModel.pendingListFocus.value = false
                         mainViewModel.selectGroup(group)
                     }
@@ -367,27 +473,25 @@ private fun LiveScreen(
                             }
                         }
                     }
-
                     is PlaylistUiState.Error -> {
-                        Text(
-                            text = (uiState as PlaylistUiState.Error).message,
-                            color = MaterialTheme.colorScheme.error,
-                            modifier = Modifier.align(Alignment.Center)
+                        EmptyState(
+                            icon = Icons.Filled.Info,
+                            title = "Fehler",
+                            subtitle = (uiState as PlaylistUiState.Error).message
                         )
                     }
-
                     else -> {
                         if (channels.isEmpty()) {
-                            Text(
-                                text = if (hasChannels) "Keine Treffer." else "Über das Menü links unter „Einstellungen“ eine Playlist hinzufügen.",
-                                modifier = Modifier.align(Alignment.Center)
+                            EmptyState(
+                                icon = Icons.Filled.Info,
+                                title = "Keine Sender",
+                                subtitle = if (hasChannels) "In dieser Kategorie gibt es keine Treffer." else "Über das Menü links unter „Einstellungen“ eine Playlist hinzufügen."
                             )
                         } else {
                             LazyColumn(
                                 state = listState,
                                 modifier = Modifier
                                     .fillMaxSize()
-                                    // MENÜ = Sender-Aktionen; FF/REW = seitenweise blättern.
                                     .onPreviewKeyEvent { event ->
                                         if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                                         when (event.key) {
@@ -399,13 +503,12 @@ private fun LiveScreen(
                                     },
                                 verticalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                // Kein URL-basierter Key: reale Playlists enthalten denselben Stream
-                                // mehrfach; doppelte Keys würden die LazyColumn crashen.
                                 itemsIndexed(channels) { index, channel ->
                                     ChannelRow(
                                         channel = channel,
                                         isFavorite = channel.url in favorites,
                                         epg = mainViewModel.epgFor(channel),
+                                        showGroup = selectedGroup == null,
                                         modifier = if (index == targetFocusIndex) {
                                             Modifier.focusRequester(listFocusRequester)
                                         } else Modifier,
@@ -428,8 +531,6 @@ private fun LiveScreen(
     }
 }
 
-// ---------- Filme ----------
-
 @Composable
 private fun VodContent(mainViewModel: MainViewModel) {
     val vod by mainViewModel.visibleVod
@@ -447,8 +548,6 @@ private fun VodContent(mainViewModel: MainViewModel) {
     val pendingFocus by mainViewModel.pendingVodFocus
     val targetIndex = mainViewModel.vodFocusIndex.coerceIn(0, maxOf(0, vod.lastIndex))
 
-    // Fokus/Scroll-Wiederherstellung: Bereichswechsel und Rückkehr aus der Detailseite.
-    // Smartphone: nur Scroll-Position, kein programmatischer Fokus (siehe LiveScreen).
     LaunchedEffect(pendingFocus, vod.size) {
         if (!pendingFocus || vod.isEmpty()) return@LaunchedEffect
         gridState.scrollToItem(targetIndex)
@@ -490,8 +589,6 @@ private fun VodContent(mainViewModel: MainViewModel) {
                     entries = categoryEntries,
                     selectedKey = selectedCategory,
                     onSelect = { category ->
-                        // Siehe Live: ausstehende Fokus-Wiederherstellung verwerfen, sobald
-                        // der Nutzer die Kategorien steuert (verhindert Fokus-Klau ins Grid).
                         mainViewModel.pendingVodFocus.value = false
                         mainViewModel.selectVodCategory(category)
                     }
@@ -513,9 +610,10 @@ private fun VodContent(mainViewModel: MainViewModel) {
                             }
                         }
                     } else {
-                        Text(
-                            text = contentInfo.ifEmpty { "Keine Filme." },
-                            modifier = Modifier.align(Alignment.Center)
+                        EmptyState(
+                            icon = Icons.Filled.Info,
+                            title = "Keine Filme",
+                            subtitle = contentInfo.ifEmpty { "In dieser Kategorie gibt es keine Treffer." }
                         )
                     }
                 } else {
@@ -537,7 +635,10 @@ private fun VodContent(mainViewModel: MainViewModel) {
                                 onClick = { mainViewModel.openVod(item) },
                                 onLongClick = { mainViewModel.toggleVodFavorite(item) },
                                 onFocusChange = { focused ->
-                                    if (focused) mainViewModel.vodFocusIndex = index
+                                    if (focused) {
+                                        mainViewModel.vodFocusIndex = index
+                                        mainViewModel.focusedBackdrop.value = item.icon
+                                    }
                                 }
                             )
                         }
@@ -547,8 +648,6 @@ private fun VodContent(mainViewModel: MainViewModel) {
         }
     }
 }
-
-// ---------- Serien ----------
 
 @Composable
 private fun SeriesContent(mainViewModel: MainViewModel) {
@@ -629,9 +728,10 @@ private fun SeriesContent(mainViewModel: MainViewModel) {
                             }
                         }
                     } else {
-                        Text(
-                            text = contentInfo.ifEmpty { "Keine Serien." },
-                            modifier = Modifier.align(Alignment.Center)
+                        EmptyState(
+                            icon = Icons.Filled.Info,
+                            title = "Keine Serien",
+                            subtitle = contentInfo.ifEmpty { "In dieser Kategorie gibt es keine Treffer." }
                         )
                     }
                 } else {
@@ -653,84 +753,15 @@ private fun SeriesContent(mainViewModel: MainViewModel) {
                                 onClick = { mainViewModel.openSeries(item) },
                                 onLongClick = { mainViewModel.toggleSeriesFavorite(item) },
                                 onFocusChange = { focused ->
-                                    if (focused) mainViewModel.seriesFocusIndex = index
+                                    if (focused) {
+                                        mainViewModel.seriesFocusIndex = index
+                                        mainViewModel.focusedBackdrop.value = item.cover
+                                    }
                                 }
                             )
                         }
                     }
                 }
-            }
-        }
-    }
-}
-
-/** Globale Suchergebnisse über Live-Sender, Filme und Serien. */
-@Composable
-private fun SearchResults(
-    mainViewModel: MainViewModel,
-    onChannelLongPress: (Channel) -> Unit
-) {
-    val channels by mainViewModel.searchChannels
-    val vod by mainViewModel.searchVod
-    val series by mainViewModel.searchSeries
-    val favorites by mainViewModel.favorites
-
-    Spacer(Modifier.height(16.dp))
-    if (channels.isEmpty() && vod.isEmpty() && series.isEmpty()) {
-        Box(modifier = Modifier.fillMaxSize()) {
-            Text("Keine Treffer.", modifier = Modifier.align(Alignment.Center))
-        }
-        return
-    }
-
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        if (channels.isNotEmpty()) {
-            item { SearchSectionTitle("Sender (${channels.size})") }
-            items(channels, key = { "c" + it.url + it.name }) { channel ->
-                ChannelRow(
-                    channel = channel,
-                    isFavorite = channel.url in favorites,
-                    epg = mainViewModel.epgFor(channel),
-                    onClick = {
-                        // Erfolgreiche Suche in den Verlauf übernehmen.
-                        mainViewModel.recordSearchQuery()
-                        mainViewModel.selectChannel(channel)
-                    },
-                    onLongClick = { onChannelLongPress(channel) }
-                )
-            }
-        }
-        if (vod.isNotEmpty()) {
-            item { SearchSectionTitle("Filme (${vod.size})") }
-            items(vod, key = { "v" + it.id }) { item ->
-                MediaRow(
-                    title = item.name,
-                    subtitle = null,
-                    icon = item.icon,
-                    showResume = false,
-                    onClick = {
-                        mainViewModel.recordSearchQuery()
-                        mainViewModel.openVod(item)
-                    }
-                )
-            }
-        }
-        if (series.isNotEmpty()) {
-            item { SearchSectionTitle("Serien (${series.size})") }
-            items(series, key = { "s" + it.id }) { item ->
-                MediaRow(
-                    title = item.name,
-                    subtitle = null,
-                    icon = item.cover,
-                    showResume = false,
-                    onClick = {
-                        mainViewModel.recordSearchQuery()
-                        mainViewModel.openSeries(item)
-                    }
-                )
             }
         }
     }
@@ -746,7 +777,6 @@ private fun SearchSectionTitle(title: String) {
     )
 }
 
-/** Poster-Kachel für Filme/Serien im Grid, D-Pad-fokussierbar. */
 @Composable
 private fun PosterCard(
     title: String,
@@ -765,7 +795,6 @@ private fun PosterCard(
                 focusedScale = 1.05f,
                 restColor = Color.Transparent,
                 onFocusChange = onFocusChange,
-                // Platz für die Vergrößerung: verhindert Abschneiden an den Grid-Rändern.
                 focusRoom = 10.dp
             )
             .padding(6.dp)
@@ -823,6 +852,7 @@ internal fun ChannelRow(
     channel: Channel,
     isFavorite: Boolean,
     epg: EpgNowNext,
+    showGroup: Boolean = false,
     modifier: Modifier = Modifier,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
@@ -846,15 +876,26 @@ internal fun ChannelRow(
             Spacer(Modifier.width(16.dp))
         }
         Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = channel.name,
-                color = fg,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                style = MaterialTheme.typography.titleMedium
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = channel.name,
+                    color = fg,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.weight(1f, fill = false)
+                )
+                if (showGroup && channel.group != null) {
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        text = channel.group,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.labelSmall,
+                        modifier = Modifier.alpha(0.6f)
+                    )
+                }
+            }
             if (epg.now != null) {
-                // "Jetzt läuft"/"Gleich" aus dem EPG (Zuordnung über tvg-id oder Sendername)
                 Text(
                     text = buildString {
                         append("Jetzt: ${epg.now}")
@@ -868,7 +909,6 @@ internal fun ChannelRow(
                 val progress = epg.progress
                 if (progress != null) {
                     Spacer(Modifier.height(4.dp))
-                    // Dünner Fortschrittsbalken der laufenden Sendung
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -896,7 +936,6 @@ internal fun ChannelRow(
     }
 }
 
-/** Zeile für Filme/Serien mit Poster, D-Pad-fokussierbar. */
 @Composable
 private fun MediaRow(
     title: String,
@@ -985,21 +1024,24 @@ internal fun GroupChip(
     }
 }
 
-/** Einheitlicher TV-Button mit Skalierung und Glow-Fokus. */
 @Composable
 fun TvButton(
     text: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     containerColor: Color = MaterialTheme.colorScheme.primary,
-    contentColor: Color = MaterialTheme.colorScheme.onPrimary
+    contentColor: Color = MaterialTheme.colorScheme.onPrimary,
+    borderColor: Color = Color.Transparent,
+    shape: Shape = RoundedCornerShape(12.dp)
 ) {
     Box(
         modifier = modifier
             .tvFocusFrame(
                 onClick = onClick,
                 restColor = containerColor,
-                shape = RoundedCornerShape(12.dp)
+                shape = shape,
+                unfocusedBorderColor = borderColor,
+                unfocusedBorderWidth = if (borderColor != Color.Transparent) 1.5.dp else 0.dp
             )
             .padding(horizontal = 24.dp, vertical = 12.dp),
         contentAlignment = Alignment.Center

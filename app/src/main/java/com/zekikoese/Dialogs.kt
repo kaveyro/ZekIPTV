@@ -13,7 +13,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -104,8 +103,18 @@ fun PlaylistInputDialog(
                 )
                 Spacer(Modifier.height(24.dp))
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    Button(onClick = onDismiss, modifier = Modifier.padding(end = 8.dp)) { Text("Abbrechen") }
-                    Button(onClick = { onConfirm(name, url); onDismiss() }) { Text("Hinzufügen") }
+                    TvButton(
+                        text = "Abbrechen",
+                        onClick = onDismiss,
+                        modifier = Modifier.padding(end = 8.dp),
+                        containerColor = Color.Transparent,
+                        contentColor = MaterialTheme.colorScheme.onSurface,
+                        borderColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                    )
+                    TvButton(
+                        text = "Hinzufügen",
+                        onClick = { onConfirm(name, url); onDismiss() }
+                    )
                 }
             }
         }
@@ -147,8 +156,18 @@ fun SingleTextInputDialog(
                 )
                 Spacer(Modifier.height(24.dp))
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    Button(onClick = onDismiss, modifier = Modifier.padding(end = 8.dp)) { Text("Abbrechen") }
-                    Button(onClick = { onConfirm(text); onDismiss() }) { Text("Hinzufügen") }
+                    TvButton(
+                        text = "Abbrechen",
+                        onClick = onDismiss,
+                        modifier = Modifier.padding(end = 8.dp),
+                        containerColor = Color.Transparent,
+                        contentColor = MaterialTheme.colorScheme.onSurface,
+                        borderColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                    )
+                    TvButton(
+                        text = "Hinzufügen",
+                        onClick = { onConfirm(text); onDismiss() }
+                    )
                 }
             }
         }
