@@ -64,6 +64,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
+import com.zekikoese.ui.LocalIsTv
 import com.zekikoese.ui.tvFocusFrame
 import kotlinx.coroutines.android.awaitFrame
 
@@ -106,21 +107,34 @@ fun MainScreen(mainViewModel: MainViewModel = viewModel()) {
         }
     }
 
-    Row(modifier = Modifier.fillMaxSize()) {
-        NavRail(
-            current = destination,
-            xtreamAvailable = xtreamAvailable,
-            onNavigate = mainViewModel::navigate
-        )
-        Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
-            when (destination) {
-                NavDestination.SEARCH -> SearchScreen(mainViewModel) { actionsChannel = it }
-                NavDestination.HOME -> HomeScreen(mainViewModel) { actionsChannel = it }
-                NavDestination.LIVE -> LiveScreen(mainViewModel) { actionsChannel = it }
-                NavDestination.MOVIES -> VodContent(mainViewModel)
-                NavDestination.SERIES -> SeriesContent(mainViewModel)
-                NavDestination.SETTINGS -> SettingsScreen(mainViewModel)
+    // Aktiver Bereich — identisch für TV- und Smartphone-Shell.
+    val mainContent: @Composable () -> Unit = {
+        when (destination) {
+            NavDestination.SEARCH -> SearchScreen(mainViewModel) { actionsChannel = it }
+            NavDestination.HOME -> HomeScreen(mainViewModel) { actionsChannel = it }
+            NavDestination.LIVE -> LiveScreen(mainViewModel) { actionsChannel = it }
+            NavDestination.MOVIES -> VodContent(mainViewModel)
+            NavDestination.SERIES -> SeriesContent(mainViewModel)
+            NavDestination.SETTINGS -> SettingsScreen(mainViewModel)
+        }
+    }
+
+    if (LocalIsTv.current) {
+        // TV-Shell: linke Navigations-Rail (D-Pad), unverändert.
+        Row(modifier = Modifier.fillMaxSize()) {
+            NavRail(
+                current = destination,
+                xtreamAvailable = xtreamAvailable,
+                onNavigate = mainViewModel::navigate
+            )
+            Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
+                mainContent()
             }
+        }
+    } else {
+        // Smartphone-Shell: untere Navigationsleiste (Touch).
+        PhoneMainScreen(mainViewModel) {
+            mainContent()
         }
     }
 
@@ -259,6 +273,7 @@ private fun LiveScreen(
     val favorites by mainViewModel.favorites
     val hasChannels = channels.isNotEmpty() || groups.isNotEmpty()
 
+    val isTv = LocalIsTv.current
     val listState = rememberLazyListState()
     val listFocusRequester = remember { FocusRequester() }
     val targetFocusIndex = mainViewModel.lastFocusedIndex.coerceIn(0, maxOf(0, channels.lastIndex))
@@ -271,9 +286,15 @@ private fun LiveScreen(
     // Fokus-Wiederherstellung bei Erstladung, Bereichswechsel, Rückkehr aus dem Player und
     // FF/REW-Sprüngen (explizites Flag). Fokus mit Frame-Wiederholung anfordern, weil die
     // Ziel-Zeile direkt nach scrollToItem u.U. noch nicht attached ist.
+    // Auf dem Smartphone nur die Scroll-Position wiederherstellen — programmatischer Fokus
+    // würde dort den TV-Fokusrahmen auf eine zufällige Zeile malen.
     LaunchedEffect(pendingListFocus, channels.size) {
         if (!pendingListFocus || channels.isEmpty()) return@LaunchedEffect
         listState.scrollToItem(targetFocusIndex)
+        if (!isTv) {
+            mainViewModel.pendingListFocus.value = false
+            return@LaunchedEffect
+        }
         repeat(10) {
             awaitFrame()
             if (runCatching { listFocusRequester.requestFocus() }.isSuccess) {
@@ -291,17 +312,29 @@ private fun LiveScreen(
         mainViewModel.pendingListFocus.value = true
     }
 
+    // Kategorien: TV = Fokus-Spalte links, Smartphone = antippbarer Picker über der Liste.
+    val categoryEntries = buildList {
+        add(CategoryEntry(null, "Alle", allCount))
+        groups.forEach { add(CategoryEntry(it, it, groupCounts[it])) }
+    }
+
     Column(modifier = Modifier.fillMaxSize().padding(horizontal = 28.dp, vertical = 24.dp)) {
         ScreenTitle("Live-TV")
 
+        if (!isTv && groups.isNotEmpty()) {
+            PhoneCategoryPicker(
+                entries = categoryEntries,
+                selectedKey = selectedGroup,
+                onSelect = mainViewModel::selectGroup
+            )
+            Spacer(Modifier.height(12.dp))
+        }
+
         Row(modifier = Modifier.fillMaxSize()) {
             // Kategorie-Spalte links: Filter greift beim Fokussieren, RECHTS/OK = Senderliste.
-            if (groups.isNotEmpty()) {
+            if (isTv && groups.isNotEmpty()) {
                 CategoryColumn(
-                    entries = buildList {
-                        add(CategoryEntry(null, "Alle", allCount))
-                        groups.forEach { add(CategoryEntry(it, it, groupCounts[it])) }
-                    },
+                    entries = categoryEntries,
                     selectedKey = selectedGroup,
                     onSelect = { group ->
                         // Nutzer steuert die Kategorien: eine evtl. noch ausstehende
@@ -392,15 +425,21 @@ private fun VodContent(mainViewModel: MainViewModel) {
     val contentInfo by mainViewModel.contentInfo
     val favorites by mainViewModel.favorites
 
+    val isTv = LocalIsTv.current
     val gridState = rememberLazyGridState()
     val gridFocusRequester = remember { FocusRequester() }
     val pendingFocus by mainViewModel.pendingVodFocus
     val targetIndex = mainViewModel.vodFocusIndex.coerceIn(0, maxOf(0, vod.lastIndex))
 
     // Fokus/Scroll-Wiederherstellung: Bereichswechsel und Rückkehr aus der Detailseite.
+    // Smartphone: nur Scroll-Position, kein programmatischer Fokus (siehe LiveScreen).
     LaunchedEffect(pendingFocus, vod.size) {
         if (!pendingFocus || vod.isEmpty()) return@LaunchedEffect
         gridState.scrollToItem(targetIndex)
+        if (!isTv) {
+            mainViewModel.pendingVodFocus.value = false
+            return@LaunchedEffect
+        }
         repeat(10) {
             awaitFrame()
             if (runCatching { gridFocusRequester.requestFocus() }.isSuccess) {
@@ -411,17 +450,28 @@ private fun VodContent(mainViewModel: MainViewModel) {
         mainViewModel.pendingVodFocus.value = false
     }
 
+    val categoryEntries = buildList {
+        add(CategoryEntry(null, "Alle", allItems.size))
+        add(CategoryEntry(MainViewModel.FAV_CATEGORY, "★ Favoriten", favCount))
+        categories.forEach { (id, name) -> add(CategoryEntry(id, name, categoryCounts[id])) }
+    }
+
     Column(modifier = Modifier.fillMaxSize().padding(horizontal = 28.dp, vertical = 24.dp)) {
         ScreenTitle("Filme")
 
+        if (!isTv && categories.isNotEmpty()) {
+            PhoneCategoryPicker(
+                entries = categoryEntries,
+                selectedKey = selectedCategory,
+                onSelect = mainViewModel::selectVodCategory
+            )
+            Spacer(Modifier.height(12.dp))
+        }
+
         Row(modifier = Modifier.fillMaxSize()) {
-            if (categories.isNotEmpty()) {
+            if (isTv && categories.isNotEmpty()) {
                 CategoryColumn(
-                    entries = buildList {
-                        add(CategoryEntry(null, "Alle", allItems.size))
-                        add(CategoryEntry(MainViewModel.FAV_CATEGORY, "★ Favoriten", favCount))
-                        categories.forEach { (id, name) -> add(CategoryEntry(id, name, categoryCounts[id])) }
-                    },
+                    entries = categoryEntries,
                     selectedKey = selectedCategory,
                     onSelect = { category ->
                         // Siehe Live: ausstehende Fokus-Wiederherstellung verwerfen, sobald
@@ -481,6 +531,7 @@ private fun SeriesContent(mainViewModel: MainViewModel) {
     val contentInfo by mainViewModel.contentInfo
     val favorites by mainViewModel.favorites
 
+    val isTv = LocalIsTv.current
     val gridState = rememberLazyGridState()
     val gridFocusRequester = remember { FocusRequester() }
     val pendingFocus by mainViewModel.pendingSeriesFocus
@@ -489,6 +540,10 @@ private fun SeriesContent(mainViewModel: MainViewModel) {
     LaunchedEffect(pendingFocus, series.size) {
         if (!pendingFocus || series.isEmpty()) return@LaunchedEffect
         gridState.scrollToItem(targetIndex)
+        if (!isTv) {
+            mainViewModel.pendingSeriesFocus.value = false
+            return@LaunchedEffect
+        }
         repeat(10) {
             awaitFrame()
             if (runCatching { gridFocusRequester.requestFocus() }.isSuccess) {
@@ -499,17 +554,28 @@ private fun SeriesContent(mainViewModel: MainViewModel) {
         mainViewModel.pendingSeriesFocus.value = false
     }
 
+    val categoryEntries = buildList {
+        add(CategoryEntry(null, "Alle", allItems.size))
+        add(CategoryEntry(MainViewModel.FAV_CATEGORY, "★ Favoriten", favCount))
+        categories.forEach { (id, name) -> add(CategoryEntry(id, name, categoryCounts[id])) }
+    }
+
     Column(modifier = Modifier.fillMaxSize().padding(horizontal = 28.dp, vertical = 24.dp)) {
         ScreenTitle("Serien")
 
+        if (!isTv && categories.isNotEmpty()) {
+            PhoneCategoryPicker(
+                entries = categoryEntries,
+                selectedKey = selectedCategory,
+                onSelect = mainViewModel::selectSeriesCategory
+            )
+            Spacer(Modifier.height(12.dp))
+        }
+
         Row(modifier = Modifier.fillMaxSize()) {
-            if (categories.isNotEmpty()) {
+            if (isTv && categories.isNotEmpty()) {
                 CategoryColumn(
-                    entries = buildList {
-                        add(CategoryEntry(null, "Alle", allItems.size))
-                        add(CategoryEntry(MainViewModel.FAV_CATEGORY, "★ Favoriten", favCount))
-                        categories.forEach { (id, name) -> add(CategoryEntry(id, name, categoryCounts[id])) }
-                    },
+                    entries = categoryEntries,
                     selectedKey = selectedCategory,
                     onSelect = { category ->
                         mainViewModel.pendingSeriesFocus.value = false

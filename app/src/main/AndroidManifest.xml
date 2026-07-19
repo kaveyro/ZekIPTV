@@ -21,12 +21,14 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.Iptv"
         android:usesCleartextTraffic="true"><!-- Viele IPTV-Playlists/Streams laufen über unverschlüsseltes HTTP. -->
+        <!-- Kein screenOrientation-Lock mehr: MainActivity erzwingt Querformat zur Laufzeit
+             auf TV-Geräten; Handys dürfen rotieren. configChanges verhindert dabei die
+             Activity-Neuerstellung — die Wiedergabe läuft bei Rotation unterbrechungsfrei. -->
         <activity
             android:name=".MainActivity"
             android:banner="@drawable/tv_banner"
             android:configChanges="orientation|screenSize|keyboardHidden"
-            android:exported="true"
-            android:screenOrientation="landscape">
+            android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <!-- Startet auf Handy/Tablet ... -->

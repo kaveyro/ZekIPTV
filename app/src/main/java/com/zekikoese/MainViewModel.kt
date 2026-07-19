@@ -56,6 +56,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     // Einstellungen
     val playlists = mutableStateOf<List<PlaylistEntry>>(emptyList())
     val themeMode = mutableStateOf("dark") // dark | light | system
+    val uiModeOverride = mutableStateOf("auto") // auto | tv | phone (Bedienoberfläche)
     val epgSources = mutableStateOf<Set<String>>(emptySet())
     val epgInfo = mutableStateOf("")
     val autoplayLast = mutableStateOf(false)
@@ -280,6 +281,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             url.value = repository.urlFlow.first()
             themeMode.value = repository.themeFlow.first()
+            uiModeOverride.value = repository.uiModeFlow.first()
             epgSources.value = repository.epgSourcesFlow.first()
             autoplayLast.value = repository.autoplayFlow.first()
             resumePositions.value = repository.resumePositionsFlow.first()
@@ -401,6 +403,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun setAutoplayLast(enabled: Boolean) {
         autoplayLast.value = enabled
         viewModelScope.launch { repository.saveAutoplay(enabled) }
+    }
+
+    fun setUiMode(mode: String) {
+        uiModeOverride.value = mode
+        viewModelScope.launch { repository.saveUiMode(mode) }
     }
 
     // ---------- Navigation / Xtream-Inhalte ----------
@@ -804,6 +811,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     // Zustände neu einlesen und Playlist mit den importierten Daten laden.
                     url.value = repository.urlFlow.first()
                     themeMode.value = repository.themeFlow.first()
+                    uiModeOverride.value = repository.uiModeFlow.first()
                     epgSources.value = repository.epgSourcesFlow.first()
                     autoplayLast.value = repository.autoplayFlow.first()
                     playlists.value = repository.playlistsFlow.first()

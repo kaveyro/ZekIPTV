@@ -50,6 +50,7 @@ class PlaylistRepository(private val context: Context) {
         val WATCH_META = stringPreferencesKey("watch_meta_json") // {url: {title, poster, ts, duration}}
         val HIDDEN_GROUPS = stringSetPreferencesKey("hidden_groups") // ausgeblendete Live-Kategorien
         val SEARCH_HISTORY = stringPreferencesKey("search_history_json") // ["query", ...] neueste zuerst
+        val UI_MODE = stringPreferencesKey("ui_mode") // auto | tv | phone
     }
 
     private companion object {
@@ -96,6 +97,8 @@ class PlaylistRepository(private val context: Context) {
         prefs[Keys.SEARCH_HISTORY]?.let(::decodeStringList) ?: emptyList()
     }
 
+    val uiModeFlow: Flow<String> = context.dataStore.data.map { it[Keys.UI_MODE] ?: "auto" }
+
     suspend fun saveUrl(url: String) {
         context.dataStore.edit { it[Keys.URL] = url }
     }
@@ -125,6 +128,10 @@ class PlaylistRepository(private val context: Context) {
 
     suspend fun saveAutoplay(enabled: Boolean) {
         context.dataStore.edit { it[Keys.AUTOPLAY] = enabled.toString() }
+    }
+
+    suspend fun saveUiMode(mode: String) {
+        context.dataStore.edit { it[Keys.UI_MODE] = mode }
     }
 
     suspend fun saveLastChannel(url: String) {
@@ -311,6 +318,7 @@ class PlaylistRepository(private val context: Context) {
             put("recentChannels", prefs[Keys.RECENT_CHANNELS] ?: "[]")
             put("watchMeta", prefs[Keys.WATCH_META] ?: "{}")
             put("hiddenGroups", JSONArray((prefs[Keys.HIDDEN_GROUPS] ?: emptySet()).toList()))
+            put("uiMode", prefs[Keys.UI_MODE] ?: "auto")
         }
         backupFile.writeText(root.toString(2))
         backupFile.absolutePath
@@ -333,6 +341,7 @@ class PlaylistRepository(private val context: Context) {
             prefs[Keys.RECENT_CHANNELS] = root.optString("recentChannels", "[]")
             prefs[Keys.WATCH_META] = root.optString("watchMeta", "{}")
             prefs[Keys.HIDDEN_GROUPS] = jsonToSet("hiddenGroups")
+            prefs[Keys.UI_MODE] = root.optString("uiMode", "auto")
         }
         backupFile.absolutePath
     }

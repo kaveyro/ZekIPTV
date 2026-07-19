@@ -16,9 +16,11 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -39,17 +41,19 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.unit.dp
+import com.zekikoese.ui.LocalIsTv
 import kotlinx.coroutines.android.awaitFrame
 
 /** Sprungweite (Einträge) beim Blättern mit den Vor-/Zurückspulen-Tasten. */
 private const val OVERLAY_PAGE_JUMP = 10
 
 /**
- * Senderlisten-Overlay im Player (öffnet mit DPAD-LINKS bei Live-Wiedergabe):
- * Zappen ohne den Player zu verlassen. Links eine vertikale Gruppen-Spalte (Filter greift
- * beim Fokussieren), rechts die Senderliste — wie im Live-TV-Bereich. Der Gruppenfilter
- * wird im ViewModel gemerkt und überlebt Schließen/Öffnen des Overlays; der Filter des
- * Live-Bereichs bleibt unangetastet.
+ * Senderlisten-Overlay im Player (öffnet mit DPAD-LINKS bei Live-Wiedergabe, auf dem
+ * Smartphone über den Senderlisten-Button): Zappen ohne den Player zu verlassen.
+ * TV: links eine vertikale Gruppen-Spalte (Filter greift beim Fokussieren), rechts die
+ * Senderliste — wie im Live-TV-Bereich. Smartphone: einspaltiges Panel mit antippbarem
+ * Kategorie-Picker über der Liste. Der Gruppenfilter wird im ViewModel gemerkt und
+ * überlebt Schließen/Öffnen des Overlays; der Filter des Live-Bereichs bleibt unangetastet.
  */
 @Composable
 fun PlayerChannelOverlay(
@@ -66,6 +70,7 @@ fun PlayerChannelOverlay(
         // Zurück-Taste schließt nur das Overlay, nicht den Player.
         BackHandler(onBack = onDismiss)
 
+        val isTv = LocalIsTv.current
         val groups by mainViewModel.groups
         val groupCounts by mainViewModel.groupCounts
         val allCount by mainViewModel.unhiddenChannelCount
@@ -99,9 +104,11 @@ fun PlayerChannelOverlay(
 
         // Fokus mit Frame-Wiederholung anfordern: direkt nach scrollToItem ist die Zeile u.U.
         // noch nicht attached, und die PlayerView (Android-View) gibt den Fokus nicht sofort her.
+        // Smartphone: nur scrollen — programmatischer Fokus würde den TV-Fokusrahmen malen.
         LaunchedEffect(focusTrigger) {
             if (focusTrigger == 0 || channels.isEmpty()) return@LaunchedEffect
             listState.scrollToItem(focusTarget)
+            if (!isTv) return@LaunchedEffect
             repeat(10) {
                 awaitFrame()
                 if (runCatching { rowFocusRequester.requestFocus() }.isSuccess) return@LaunchedEffect
@@ -114,77 +121,110 @@ fun PlayerChannelOverlay(
             focusTrigger++
         }
 
-        Row(modifier = Modifier.fillMaxSize()) {
-            Row(
+        val categoryEntries = buildList {
+            add(CategoryEntry(null, "Alle", allCount))
+            groups.forEach { add(CategoryEntry(it, it, groupCounts[it])) }
+        }
+
+        // Senderliste — von TV- und Smartphone-Panel geteilt (Key-Handler sind auf Touch inert).
+        val channelList: @Composable () -> Unit = {
+            LazyColumn(
+                state = listState,
+                verticalArrangement = Arrangement.spacedBy(6.dp),
                 modifier = Modifier
-                    .fillMaxHeight()
-                    .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.96f))
-                    .padding(20.dp)
+                    .fillMaxSize()
+                    // RECHTS schließt das Overlay (zurück zum Player); FF/REW blättert.
+                    .onPreviewKeyEvent { event ->
+                        if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                        when (event.key) {
+                            Key.DirectionRight -> { onDismiss(); true }
+                            Key.MediaFastForward -> { jumpBy(+OVERLAY_PAGE_JUMP); true }
+                            Key.MediaRewind -> { jumpBy(-OVERLAY_PAGE_JUMP); true }
+                            else -> false
+                        }
+                    }
             ) {
-                // Gruppen-Spalte: hoch/runter filtert beim Fokussieren, RECHTS/OK = Senderliste.
-                if (groups.isNotEmpty()) {
-                    Column {
+                // Kein URL-Key: reale Playlists enthalten denselben Stream mehrfach.
+                itemsIndexed(channels) { index, channel ->
+                    ChannelRow(
+                        channel = channel,
+                        isFavorite = channel.url in favorites,
+                        epg = mainViewModel.epgFor(channel),
+                        modifier = if (index == focusTarget) {
+                            Modifier.focusRequester(rowFocusRequester)
+                        } else Modifier,
+                        onClick = {
+                            mainViewModel.selectChannel(channel)
+                            onDismiss()
+                        },
+                        onLongClick = {},
+                        onFocusChange = { focused -> if (focused) focusedIndex = index }
+                    )
+                }
+            }
+        }
+
+        Row(modifier = Modifier.fillMaxSize()) {
+            if (isTv) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxHeight()
+                        .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.96f))
+                        .padding(20.dp)
+                ) {
+                    // Gruppen-Spalte: hoch/runter filtert beim Fokussieren, RECHTS/OK = Senderliste.
+                    if (groups.isNotEmpty()) {
+                        Column {
+                            Text(
+                                text = "Kategorien",
+                                style = MaterialTheme.typography.titleLarge,
+                                modifier = Modifier.padding(bottom = 12.dp)
+                            )
+                            CategoryColumn(
+                                entries = categoryEntries,
+                                selectedKey = group,
+                                onSelect = { mainViewModel.playerOverlayGroup.value = it },
+                                width = 208.dp,
+                                // LINKS darf den Fokus nicht an die dahinterliegende PlayerView verlieren.
+                                guardLeft = true
+                            )
+                        }
+                        Spacer(Modifier.width(16.dp))
+                    }
+
+                    Column(modifier = Modifier.width(400.dp).fillMaxHeight()) {
                         Text(
-                            text = "Kategorien",
+                            text = "Senderliste",
                             style = MaterialTheme.typography.titleLarge,
                             modifier = Modifier.padding(bottom = 12.dp)
                         )
-                        CategoryColumn(
-                            entries = buildList {
-                                add(CategoryEntry(null, "Alle", allCount))
-                                groups.forEach { add(CategoryEntry(it, it, groupCounts[it])) }
-                            },
-                            selectedKey = group,
-                            onSelect = { mainViewModel.playerOverlayGroup.value = it },
-                            width = 208.dp,
-                            // LINKS darf den Fokus nicht an die dahinterliegende PlayerView verlieren.
-                            guardLeft = true
-                        )
+                        channelList()
                     }
-                    Spacer(Modifier.width(16.dp))
                 }
-
-                Column(modifier = Modifier.width(400.dp).fillMaxHeight()) {
+            } else {
+                // Smartphone: einspaltiges Panel — Kategorie-Picker über der Senderliste.
+                Column(
+                    modifier = Modifier
+                        .fillMaxHeight()
+                        .fillMaxWidth(0.92f)
+                        .widthIn(max = 400.dp)
+                        .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.96f))
+                        .padding(16.dp)
+                ) {
                     Text(
                         text = "Senderliste",
                         style = MaterialTheme.typography.titleLarge,
                         modifier = Modifier.padding(bottom = 12.dp)
                     )
-
-                    LazyColumn(
-                        state = listState,
-                        verticalArrangement = Arrangement.spacedBy(6.dp),
-                        modifier = Modifier
-                            .fillMaxSize()
-                            // RECHTS schließt das Overlay (zurück zum Player); FF/REW blättert.
-                            .onPreviewKeyEvent { event ->
-                                if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
-                                when (event.key) {
-                                    Key.DirectionRight -> { onDismiss(); true }
-                                    Key.MediaFastForward -> { jumpBy(+OVERLAY_PAGE_JUMP); true }
-                                    Key.MediaRewind -> { jumpBy(-OVERLAY_PAGE_JUMP); true }
-                                    else -> false
-                                }
-                            }
-                    ) {
-                        // Kein URL-Key: reale Playlists enthalten denselben Stream mehrfach.
-                        itemsIndexed(channels) { index, channel ->
-                            ChannelRow(
-                                channel = channel,
-                                isFavorite = channel.url in favorites,
-                                epg = mainViewModel.epgFor(channel),
-                                modifier = if (index == focusTarget) {
-                                    Modifier.focusRequester(rowFocusRequester)
-                                } else Modifier,
-                                onClick = {
-                                    mainViewModel.selectChannel(channel)
-                                    onDismiss()
-                                },
-                                onLongClick = {},
-                                onFocusChange = { focused -> if (focused) focusedIndex = index }
-                            )
-                        }
+                    if (groups.isNotEmpty()) {
+                        PhoneCategoryPicker(
+                            entries = categoryEntries,
+                            selectedKey = group,
+                            onSelect = { mainViewModel.playerOverlayGroup.value = it }
+                        )
+                        Spacer(Modifier.height(12.dp))
                     }
+                    channelList()
                 }
             }
 

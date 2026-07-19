@@ -166,6 +166,25 @@ fun SettingsScreen(mainViewModel: MainViewModel) {
             }
         }
 
+        // ---------- Bedienoberfläche (TV vs. Smartphone) ----------
+        item { SectionTitle("Bedienoberfläche") }
+        item {
+            val uiMode by mainViewModel.uiModeOverride
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                GroupChip("Automatisch", selected = uiMode == "auto") { mainViewModel.setUiMode("auto") }
+                GroupChip("TV", selected = uiMode == "tv") { mainViewModel.setUiMode("tv") }
+                GroupChip("Smartphone", selected = uiMode == "phone") { mainViewModel.setUiMode("phone") }
+            }
+        }
+        item {
+            Text(
+                "„Automatisch“ erkennt den Gerätetyp. TV = D-Pad-Oberfläche mit Navigations-Rail, " +
+                    "Smartphone = Touch-Oberfläche mit unterer Leiste und Hochformat.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+            )
+        }
+
         // ---------- Wiedergabe ----------
         item { SectionTitle("Wiedergabe") }
         item {

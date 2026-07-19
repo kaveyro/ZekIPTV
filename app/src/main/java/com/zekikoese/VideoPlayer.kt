@@ -16,6 +16,14 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -51,6 +59,7 @@ import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.PlayerView
+import com.zekikoese.ui.LocalIsTv
 import com.zekikoese.ui.tvFocusFrame
 import kotlinx.coroutines.delay
 import java.text.SimpleDateFormat
@@ -88,6 +97,9 @@ fun VideoPlayer(
     // DPAD-HOCH (Live): Info-Leiste erneut einblenden — Zähler als MutableState, damit die
     // einmalig laufende View-Factory ihn erhöhen kann und der LaunchedEffect neu anläuft.
     val infoTrigger = remember { mutableStateOf(0) }
+    // Smartphone: Sichtbarkeit der Transportleiste — daran hängt die Touch-Button-Reihe.
+    val isTv = LocalIsTv.current
+    val controllerVisible = remember { mutableStateOf(false) }
     // Referenz auf die PlayerView, um den Tasten-Fokus nach Dialog/Steuerleiste zurückzuholen.
     var playerViewRef by remember { mutableStateOf<PlayerView?>(null) }
     // Auto-Reconnect: Live-Streams reißen gern ab; mit Backoff neu verbinden.
@@ -255,8 +267,9 @@ fun VideoPlayer(
                 }.apply {
                     player = exoPlayer
                     useController = true            // D-Pad-freundliche Standard-Transportleiste
-                    // Steuerleiste nicht automatisch einblenden — sie erscheint auf OK/Pfeil.
-                    controllerAutoShow = false
+                    // TV: Steuerleiste nicht automatisch einblenden — sie erscheint auf OK/Pfeil.
+                    // Smartphone: beim Start/Antippen zeigen (Standard-Touch-Verhalten).
+                    controllerAutoShow = !isTv
                     keepScreenOn = true             // Bildschirm bleibt während der Wiedergabe an
                     setShowNextButton(false)
                     setShowPreviousButton(false)
@@ -270,6 +283,8 @@ fun VideoPlayer(
                     // Fokus deshalb zurück auf die PlayerView holen.
                     setControllerVisibilityListener(
                         PlayerView.ControllerVisibilityListener { visibility ->
+                            // Sichtbarkeit für die Touch-Button-Reihe (Smartphone) spiegeln.
+                            controllerVisible.value = visibility == android.view.View.VISIBLE
                             // Nicht den Fokus an sich reißen, solange das Senderlisten-Overlay
                             // offen ist — sonst verliert dessen Liste die D-Pad-Steuerung.
                             if (visibility != android.view.View.VISIBLE && !showChannelList.value) {
@@ -368,6 +383,61 @@ fun VideoPlayer(
                         text = "Sleep-Timer: $sleepMinutes min",
                         color = Color.White.copy(alpha = 0.7f),
                         style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+            }
+        }
+
+        // Smartphone: Touch-Buttons für die sonst nur per Fernbedienung erreichbaren
+        // Funktionen (Senderliste, Programm-Info, Zappen, Wiedergabe-Menü). Erscheinen
+        // zusammen mit der Transportleiste (Tippen auf das Bild).
+        if (!isTv && controllerVisible.value && !showChannelList.value) {
+            Row(
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(12.dp)
+                    .clip(RoundedCornerShape(24.dp))
+                    .background(Color.Black.copy(alpha = 0.55f))
+                    .padding(horizontal = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (media.isLive) {
+                    IconButton(onClick = { showChannelList.value = true }) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.List,
+                            contentDescription = "Senderliste",
+                            tint = Color.White
+                        )
+                    }
+                    IconButton(onClick = { infoTrigger.value++ }) {
+                        Icon(
+                            imageVector = Icons.Filled.Info,
+                            contentDescription = "Programm-Info",
+                            tint = Color.White
+                        )
+                    }
+                }
+                currentOnZap?.let { zap ->
+                    IconButton(onClick = { zap(+1) }) {
+                        Icon(
+                            imageVector = Icons.Filled.KeyboardArrowUp,
+                            contentDescription = "Nächster Sender",
+                            tint = Color.White
+                        )
+                    }
+                    IconButton(onClick = { zap(-1) }) {
+                        Icon(
+                            imageVector = Icons.Filled.KeyboardArrowDown,
+                            contentDescription = "Vorheriger Sender",
+                            tint = Color.White
+                        )
+                    }
+                }
+                IconButton(onClick = { showMenu = true }) {
+                    Icon(
+                        imageVector = Icons.Filled.Menu,
+                        contentDescription = "Wiedergabe-Menü",
+                        tint = Color.White
                     )
                 }
             }

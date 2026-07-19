@@ -27,6 +27,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import com.zekikoese.ui.LocalIsTv
 import com.zekikoese.ui.tvFocusFrame
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -65,9 +66,12 @@ fun ChannelActionsDialog(
     onToggleFavorite: () -> Unit,
     onDismiss: () -> Unit
 ) {
+    // TV: feste 10-Fuß-Breite; Smartphone: an die Dialogbreite des Systems anpassen.
+    val widthModifier = if (LocalIsTv.current) Modifier.width(420.dp) else Modifier.fillMaxWidth()
+
     Dialog(onDismissRequest = onDismiss) {
         Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surface) {
-            Column(modifier = Modifier.padding(24.dp).width(420.dp)) {
+            Column(modifier = Modifier.padding(24.dp).then(widthModifier)) {
                 Text(
                     text = channel.name,
                     style = MaterialTheme.typography.titleLarge,
@@ -97,10 +101,12 @@ fun EpgDayDialog(
 ) {
     val timeFormat = remember { SimpleDateFormat("HH:mm", Locale.getDefault()) }
     val now = System.currentTimeMillis()
+    val isTv = LocalIsTv.current
+    val widthModifier = if (isTv) Modifier.width(560.dp) else Modifier.fillMaxWidth()
 
     Dialog(onDismissRequest = onDismiss) {
         Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surface) {
-            Column(modifier = Modifier.padding(24.dp).width(560.dp)) {
+            Column(modifier = Modifier.padding(24.dp).then(widthModifier)) {
                 Text(
                     text = "Programm: $channelName",
                     style = MaterialTheme.typography.titleLarge,
@@ -108,7 +114,7 @@ fun EpgDayDialog(
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.padding(bottom = 12.dp)
                 )
-                LazyColumn(modifier = Modifier.heightIn(max = 560.dp)) {
+                LazyColumn(modifier = Modifier.heightIn(max = if (isTv) 560.dp else 440.dp)) {
                     items(programmes) { programme ->
                         val isNow = now >= programme.startMs && now < programme.stopMs
                         DialogRow(

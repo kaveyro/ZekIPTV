@@ -5,6 +5,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -27,8 +29,10 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
+import com.zekikoese.ui.LocalIsTv
 
 /** Detail-Seite eines Films: Poster, Metadaten, Beschreibung, Abspielen/Fortsetzen. */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun VodDetailScreen(mainViewModel: MainViewModel) {
     val item by mainViewModel.selectedVod
@@ -68,6 +72,19 @@ fun VodDetailScreen(mainViewModel: MainViewModel) {
                         )
                     )
             )
+        }
+
+        if (!LocalIsTv.current) {
+            // Smartphone: einspaltiges, scrollendes Layout (Hochformat-tauglich).
+            PhoneVodDetailContent(
+                mainViewModel = mainViewModel,
+                vod = vod,
+                info = info,
+                vodUrl = vodUrl,
+                resumeMs = resumeMs,
+                isFavorite = isFavorite
+            )
+            return@Box
         }
 
         Row(modifier = Modifier.fillMaxSize().padding(40.dp)) {
@@ -162,5 +179,110 @@ fun VodDetailScreen(mainViewModel: MainViewModel) {
             }
         }
         }
+    }
+}
+
+/** Smartphone-Variante der Film-Detailseite: eine scrollende Spalte statt Poster+Text nebeneinander. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun PhoneVodDetailContent(
+    mainViewModel: MainViewModel,
+    vod: VodItem,
+    info: VodInfo?,
+    vodUrl: String?,
+    resumeMs: Long,
+    isFavorite: Boolean
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(20.dp)
+    ) {
+        if (vod.icon != null) {
+            AsyncImage(
+                model = vod.icon,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .width(160.dp)
+                    .aspectRatio(2f / 3f)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+            )
+            Spacer(Modifier.height(16.dp))
+        }
+
+        Text(
+            text = vod.name,
+            style = MaterialTheme.typography.headlineMedium
+        )
+
+        val meta = listOfNotNull(
+            info?.releaseDate?.take(4),
+            info?.genre,
+            info?.rating?.let { "★ $it" },
+            info?.duration
+        ).joinToString("  ·  ")
+        if (meta.isNotEmpty()) {
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = meta,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
+            )
+        }
+
+        Spacer(Modifier.height(16.dp))
+
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Button(onClick = { mainViewModel.playVod(vod) }) {
+                Text(
+                    if (resumeMs > 10_000) {
+                        "▶ Fortsetzen (${resumeMs / 60_000} min)"
+                    } else {
+                        "▶ Abspielen"
+                    }
+                )
+            }
+            if (resumeMs > 10_000 && vodUrl != null) {
+                OutlinedButton(onClick = {
+                    mainViewModel.saveResume(vodUrl, 0)
+                    mainViewModel.playVod(vod)
+                }) {
+                    Text("Von vorn")
+                }
+            }
+            OutlinedButton(onClick = { mainViewModel.toggleVodFavorite(vod) }) {
+                Text(if (isFavorite) "★ Favorit" else "☆ Favorit")
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
+
+        val plot = info?.plot
+        Text(
+            text = plot ?: "Beschreibung wird geladen…",
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = if (plot != null) 0.85f else 0.5f)
+        )
+        val credits = listOfNotNull(
+            info?.director?.let { "Regie: $it" },
+            info?.cast?.let { "Besetzung: $it" }
+        )
+        if (credits.isNotEmpty()) {
+            Spacer(Modifier.height(16.dp))
+            credits.forEach {
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                )
+            }
+        }
+        Spacer(Modifier.height(24.dp))
     }
 }

@@ -58,6 +58,7 @@ private val LightColorScheme = lightColorScheme(
 @Composable
 fun IptvTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
+    isTv: Boolean = true, // Default TV: bestehende Aufrufer/Previews bleiben unverändert
     content: @Composable () -> Unit
 ) {
     val colorScheme = if (darkTheme) DarkColorScheme else LightColorScheme
@@ -67,14 +68,19 @@ fun IptvTheme(
             val window = (view.context as? Activity)?.window
             if (window != null) {
                 window.statusBarColor = colorScheme.background.toArgb()
-                WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = !darkTheme
+                // Gesten-/Navigationsleiste auf dem Handy an das Theme anpassen (TV: no-op).
+                window.navigationBarColor = colorScheme.background.toArgb()
+                WindowCompat.getInsetsController(window, view).apply {
+                    isAppearanceLightStatusBars = !darkTheme
+                    isAppearanceLightNavigationBars = !darkTheme
+                }
             }
         }
     }
 
     MaterialTheme(
         colorScheme = colorScheme,
-        typography = Typography,
+        typography = if (isTv) TvTypography else PhoneTypography,
         content = content
     )
 }

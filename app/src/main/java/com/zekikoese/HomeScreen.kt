@@ -40,6 +40,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
+import com.zekikoese.ui.LocalIsTv
 import com.zekikoese.ui.tvFocusFrame
 import kotlinx.coroutines.android.awaitFrame
 
@@ -61,11 +62,17 @@ fun HomeScreen(
     val hasRows = continueWatching.isNotEmpty() || recentChannels.isNotEmpty() || favoriteChannels.isNotEmpty()
 
     // Beim App-Start (und nach Rückkehr zu Home) den Fokus auf die erste Karte setzen,
-    // statt ihn auf der Navigations-Rail zu lassen.
+    // statt ihn auf der Navigations-Rail zu lassen. Nur auf dem TV — programmatischer
+    // Fokus würde auf Touch-Geräten den Fokusrahmen auf eine Karte malen.
+    val isTv = LocalIsTv.current
     val pendingHomeFocus by mainViewModel.pendingHomeFocus
     val firstCardFocus = remember { FocusRequester() }
     LaunchedEffect(pendingHomeFocus, hasRows) {
         if (!pendingHomeFocus || !hasRows) return@LaunchedEffect
+        if (!isTv) {
+            mainViewModel.pendingHomeFocus.value = false
+            return@LaunchedEffect
+        }
         repeat(10) {
             awaitFrame()
             if (runCatching { firstCardFocus.requestFocus() }.isSuccess) {

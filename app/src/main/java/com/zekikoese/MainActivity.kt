@@ -1,5 +1,6 @@
 package com.zekikoese
 
+import android.content.pm.ActivityInfo
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -8,9 +9,14 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.zekikoese.ui.LocalIsTv
+import com.zekikoese.ui.isTvDevice
 import com.zekikoese.ui.theme.IptvTheme
 
 class MainActivity : ComponentActivity() {
@@ -26,9 +32,30 @@ class MainActivity : ComponentActivity() {
                 "system" -> isSystemInDarkTheme()
                 else -> true // "dark" ist der TV-Standard
             }
-            IptvTheme(darkTheme = darkTheme) {
-                Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-                    IptvApp(mainViewModel)
+
+            // Bedienoberfläche: Einstellung ("tv"/"phone") übersteuert die Geräte-Erkennung.
+            val detectedTv = remember { applicationContext.isTvDevice() }
+            val uiModeOverride by mainViewModel.uiModeOverride
+            val isTv = when (uiModeOverride) {
+                "tv" -> true
+                "phone" -> false
+                else -> detectedTv
+            }
+            // TV: Querformat erzwingen (ersetzt den früheren Manifest-Lock);
+            // Handy: Rotation dem System/Nutzer überlassen.
+            LaunchedEffect(isTv) {
+                requestedOrientation = if (isTv) {
+                    ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+                } else {
+                    ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+                }
+            }
+
+            CompositionLocalProvider(LocalIsTv provides isTv) {
+                IptvTheme(darkTheme = darkTheme, isTv = isTv) {
+                    Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                        IptvApp(mainViewModel)
+                    }
                 }
             }
         }
