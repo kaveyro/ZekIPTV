@@ -32,6 +32,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -52,6 +53,7 @@ import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
@@ -60,11 +62,13 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
 import com.zekikoese.ui.LocalIsTv
+import com.zekikoese.ui.LoadingPlaceholder
 import com.zekikoese.ui.tvFocusFrame
 import kotlinx.coroutines.android.awaitFrame
 
@@ -120,16 +124,22 @@ fun MainScreen(mainViewModel: MainViewModel = viewModel()) {
     }
 
     if (LocalIsTv.current) {
-        // TV-Shell: linke Navigations-Rail (D-Pad), unverändert.
-        Row(modifier = Modifier.fillMaxSize()) {
+        // TV-Shell: Navigations-Rail als Overlay links.
+        // Der Inhalt hat einen festen Offset (Breite der eingeklappten Rail),
+        // die Rail schwebt darüber und verschiebt den Inhalt beim Ausklappen nicht mehr.
+        Box(modifier = Modifier.fillMaxSize()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(start = 72.dp)
+            ) {
+                mainContent()
+            }
             NavRail(
                 current = destination,
                 xtreamAvailable = xtreamAvailable,
                 onNavigate = mainViewModel::navigate
             )
-            Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
-                mainContent()
-            }
         }
     } else {
         // Smartphone-Shell: untere Navigationsleiste (Touch).
@@ -207,7 +217,7 @@ private fun SearchScreen(
     }
     var voiceAvailable by remember { mutableStateOf(true) }
 
-    Column(modifier = Modifier.fillMaxSize().padding(horizontal = 28.dp, vertical = 24.dp)) {
+    Column(modifier = Modifier.fillMaxSize().padding(start = 16.dp, end = 32.dp, top = 24.dp, bottom = 24.dp)) {
         ScreenTitle("Suche")
         OutlinedTextField(
             value = search,
@@ -318,7 +328,7 @@ private fun LiveScreen(
         groups.forEach { add(CategoryEntry(it, it, groupCounts[it])) }
     }
 
-    Column(modifier = Modifier.fillMaxSize().padding(horizontal = 28.dp, vertical = 24.dp)) {
+    Column(modifier = Modifier.fillMaxSize().padding(start = 16.dp, end = 32.dp, top = 24.dp, bottom = 24.dp)) {
         ScreenTitle("Live-TV")
 
         if (!isTv && groups.isNotEmpty()) {
@@ -349,7 +359,13 @@ private fun LiveScreen(
             Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
                 when (uiState) {
                     is PlaylistUiState.Loading -> {
-                        CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
+                        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            items(8) {
+                                Box(modifier = Modifier.fillMaxWidth().height(70.dp).clip(RoundedCornerShape(12.dp))) {
+                                    LoadingPlaceholder()
+                                }
+                            }
+                        }
                     }
 
                     is PlaylistUiState.Error -> {
@@ -456,7 +472,7 @@ private fun VodContent(mainViewModel: MainViewModel) {
         categories.forEach { (id, name) -> add(CategoryEntry(id, name, categoryCounts[id])) }
     }
 
-    Column(modifier = Modifier.fillMaxSize().padding(horizontal = 28.dp, vertical = 24.dp)) {
+    Column(modifier = Modifier.fillMaxSize().padding(start = 16.dp, end = 32.dp, top = 24.dp, bottom = 24.dp)) {
         ScreenTitle("Filme")
 
         if (!isTv && categories.isNotEmpty()) {
@@ -484,10 +500,24 @@ private fun VodContent(mainViewModel: MainViewModel) {
 
             Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
                 if (vod.isEmpty()) {
-                    Text(
-                        text = contentInfo.ifEmpty { "Keine Filme." },
-                        modifier = Modifier.align(Alignment.Center)
-                    )
+                    if (contentInfo.contains("laden", ignoreCase = true)) {
+                        LazyVerticalGrid(
+                            columns = GridCells.Adaptive(minSize = 150.dp),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            items(10) {
+                                Box(modifier = Modifier.fillMaxWidth().aspectRatio(2f/3f).clip(RoundedCornerShape(12.dp))) {
+                                    LoadingPlaceholder()
+                                }
+                            }
+                        }
+                    } else {
+                        Text(
+                            text = contentInfo.ifEmpty { "Keine Filme." },
+                            modifier = Modifier.align(Alignment.Center)
+                        )
+                    }
                 } else {
                     LazyVerticalGrid(
                         state = gridState,
@@ -560,7 +590,7 @@ private fun SeriesContent(mainViewModel: MainViewModel) {
         categories.forEach { (id, name) -> add(CategoryEntry(id, name, categoryCounts[id])) }
     }
 
-    Column(modifier = Modifier.fillMaxSize().padding(horizontal = 28.dp, vertical = 24.dp)) {
+    Column(modifier = Modifier.fillMaxSize().padding(start = 16.dp, end = 32.dp, top = 24.dp, bottom = 24.dp)) {
         ScreenTitle("Serien")
 
         if (!isTv && categories.isNotEmpty()) {
@@ -586,10 +616,24 @@ private fun SeriesContent(mainViewModel: MainViewModel) {
 
             Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
                 if (series.isEmpty()) {
-                    Text(
-                        text = contentInfo.ifEmpty { "Keine Serien." },
-                        modifier = Modifier.align(Alignment.Center)
-                    )
+                    if (contentInfo.contains("laden", ignoreCase = true)) {
+                        LazyVerticalGrid(
+                            columns = GridCells.Adaptive(minSize = 150.dp),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            items(10) {
+                                Box(modifier = Modifier.fillMaxWidth().aspectRatio(2f/3f).clip(RoundedCornerShape(12.dp))) {
+                                    LoadingPlaceholder()
+                                }
+                            }
+                        }
+                    } else {
+                        Text(
+                            text = contentInfo.ifEmpty { "Keine Serien." },
+                            modifier = Modifier.align(Alignment.Center)
+                        )
+                    }
                 } else {
                     LazyVerticalGrid(
                         state = gridState,
@@ -912,22 +956,60 @@ internal fun GroupChip(
     selected: Boolean,
     onClick: () -> Unit
 ) {
-    Text(
-        text = label,
-        color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-        maxLines = 1,
-        style = MaterialTheme.typography.labelLarge,
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
         modifier = Modifier
             .tvFocusFrame(
                 onClick = onClick,
                 shape = RoundedCornerShape(20.dp),
-                restColor = if (selected) {
-                    MaterialTheme.colorScheme.secondaryContainer
-                } else {
-                    MaterialTheme.colorScheme.surfaceVariant
-                }
+                restColor = MaterialTheme.colorScheme.surfaceVariant,
+                isSelected = selected
             )
-            .padding(horizontal = 18.dp, vertical = 10.dp)
-    )
+            .padding(horizontal = 16.dp, vertical = 10.dp)
+    ) {
+        if (selected) {
+            Icon(
+                imageVector = Icons.Filled.Check,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(18.dp).padding(end = 8.dp)
+            )
+        }
+        Text(
+            text = label,
+            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+            maxLines = 1,
+            style = MaterialTheme.typography.labelLarge
+        )
+    }
+}
+
+/** Einheitlicher TV-Button mit Skalierung und Glow-Fokus. */
+@Composable
+fun TvButton(
+    text: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    containerColor: Color = MaterialTheme.colorScheme.primary,
+    contentColor: Color = MaterialTheme.colorScheme.onPrimary
+) {
+    Box(
+        modifier = modifier
+            .tvFocusFrame(
+                onClick = onClick,
+                restColor = containerColor,
+                shape = RoundedCornerShape(12.dp)
+            )
+            .padding(horizontal = 24.dp, vertical = 12.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text = text,
+            color = contentColor,
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center
+        )
+    }
 }

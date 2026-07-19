@@ -17,6 +17,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
@@ -48,7 +49,8 @@ fun Modifier.tvFocusFrame(
     focusedScale: Float = 1.015f,
     restColor: Color = MaterialTheme.colorScheme.surfaceVariant,
     onFocusChange: ((Boolean) -> Unit)? = null,
-    focusRoom: Dp = 0.dp
+    focusRoom: Dp = 0.dp,
+    isSelected: Boolean = false
 ): Modifier {
     var focused by remember { mutableStateOf(false) }
     val scale by animateFloatAsState(
@@ -57,36 +59,47 @@ fun Modifier.tvFocusFrame(
         label = "tvFocusScale"
     )
     val borderColor by animateColorAsState(
-        targetValue = if (focused) AccentGlow else Color.Transparent,
+        targetValue = when {
+            focused -> AccentGlow
+            isSelected -> MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
+            else -> Color.Transparent
+        },
         animationSpec = tween(140),
         label = "tvFocusBorder"
     )
     val background by animateColorAsState(
-        targetValue = if (focused) {
-            MaterialTheme.colorScheme.primary.copy(alpha = 0.18f).compositeOver(restColor)
-        } else {
-            restColor
+        targetValue = when {
+            focused -> MaterialTheme.colorScheme.primary.copy(alpha = 0.18f).compositeOver(restColor)
+            isSelected -> MaterialTheme.colorScheme.primary.copy(alpha = 0.10f).compositeOver(restColor)
+            else -> restColor
         },
         animationSpec = tween(140),
         label = "tvFocusBackground"
     )
 
     return this
-        // Fokussierte (skalierte) Elemente über die Nachbarn zeichnen — kein Grid-Clipping.
         .zIndex(if (focused) 1f else 0f)
-        // Vor der Skalierung: Rand, in den die Vergrößerung hineinwachsen kann.
         .padding(focusRoom)
         .graphicsLayer {
             scaleX = scale
             scaleY = scale
         }
+        .shadow(
+            elevation = if (focused) 6.dp else 0.dp,
+            shape = shape,
+            spotColor = AccentGlow,
+            ambientColor = AccentGlow
+        )
         .clip(shape)
         .onFocusChanged {
             focused = it.isFocused
             onFocusChange?.invoke(it.isFocused)
         }
-        // combinedClickable macht das Element D-Pad-fokussierbar; Center = öffnen, Lang = Menü.
         .combinedClickable(onClick = onClick, onLongClick = onLongClick)
         .background(background)
-        .border(width = 2.5.dp, color = borderColor, shape = shape)
+        .border(
+            width = if (focused) 2.5.dp else if (isSelected) 1.5.dp else 0.dp,
+            color = borderColor,
+            shape = shape
+        )
 }

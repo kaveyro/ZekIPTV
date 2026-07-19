@@ -1,5 +1,7 @@
 package com.zekikoese
 
+import android.util.Log
+
 /**
  * Lädt und parst alle konfigurierten EPG-Quellen für die gegebenen Kanäle.
  * Gemeinsame Logik für das ViewModel (manueller Refresh) und den
@@ -30,7 +32,14 @@ object EpgFetcher {
                     }
                     parsed.nameToId.forEach { (name, id) -> nameToId.putIfAbsent(name, id) }
                 }
-            }.onFailure { failures++ }
+            }.onFailure {
+                Log.e("EpgFetcher", "Fehler beim Laden von $source", it)
+                failures++
+            }
+        }
+        programmes.values.forEach { list ->
+            list.sortBy(EpgProgramme::startMs)
+            XmltvParser.inferStopTimes(list)
         }
         return Result(programmes, nameToId, failures)
     }

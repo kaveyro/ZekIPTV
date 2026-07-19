@@ -97,7 +97,7 @@ fun HomeScreen(
                     false
                 }
             }
-            .padding(horizontal = 28.dp, vertical = 24.dp)
+            .padding(start = 16.dp, end = 32.dp, top = 24.dp, bottom = 24.dp)
     ) {
         ScreenTitle("Home")
 

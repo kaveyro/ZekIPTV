@@ -4,6 +4,12 @@ import android.content.pm.ActivityInfo
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.ExperimentalSharedTransitionApi
+import androidx.compose.animation.SharedTransitionLayout
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
@@ -62,6 +68,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+@OptIn(ExperimentalSharedTransitionApi::class)
 @Composable
 fun IptvApp(mainViewModel: MainViewModel = viewModel()) {
     val selectedChannel by mainViewModel.selectedChannel
@@ -69,42 +76,52 @@ fun IptvApp(mainViewModel: MainViewModel = viewModel()) {
     val selectedVod by mainViewModel.selectedVod
     val selectedSeries by mainViewModel.selectedSeries
 
-    // Live-Sender oder VOD/Episode — beides läuft im selben Player.
-    val channel = selectedChannel
-    val media = vodMedia ?: channel?.let { PlayingMedia(it.url, it.name, isLive = true) }
+    val media = vodMedia ?: selectedChannel?.let { PlayingMedia(it.url, it.name, isLive = true) }
+    val liveChannel = if (media?.isLive == true) selectedChannel else null
 
-    // Live: EPG-Infos und Position in der aktuellen Zap-Liste für die Info-Leiste des Players.
-    val liveChannel = if (media?.isLive == true) channel else null
-
-    when {
-        media != null -> VideoPlayer(
-            media = media,
-            mainViewModel = mainViewModel,
-            epg = liveChannel?.let { mainViewModel.epgFor(it) } ?: EpgNowNext(null, null, null),
-            channelNumber = liveChannel?.let { ch ->
-                mainViewModel.visibleChannels.value
-                    .indexOfFirst { it.url == ch.url }
-                    .takeIf { it >= 0 }
-                    ?.plus(1)
+    SharedTransitionLayout {
+        AnimatedContent(
+            targetState = when {
+                media != null -> "player"
+                selectedVod != null -> "vod_detail"
+                selectedSeries != null -> "series_detail"
+                else -> "main"
             },
-            resumeMs = mainViewModel.resumeFor(media.url),
-            sleepMinutes = mainViewModel.sleepTimerMinutes.value,
-            onBack = { mainViewModel.stopPlayback() },
-            onZap = if (media.isLive) {
-                { delta -> mainViewModel.zapChannel(delta) }
-            } else null,
-            onSwapLast = if (media.isLive) {
-                { mainViewModel.swapToPreviousChannel() }
-            } else null,
-            onCycleSleep = { mainViewModel.cycleSleepTimer() },
-            onSaveResume = { url, position, duration -> mainViewModel.saveResume(url, position, duration) }
-        )
+            transitionSpec = { fadeIn() togetherWith fadeOut() },
+            label = "screenTransition"
+        ) { target ->
+            when (target) {
+                "player" -> media?.let {
+                    VideoPlayer(
+                        media = it,
+                        mainViewModel = mainViewModel,
+                        epg = liveChannel?.let { mainViewModel.epgFor(it) } ?: EpgNowNext(null, null, null),
+                        channelNumber = liveChannel?.let { ch ->
+                            mainViewModel.visibleChannels.value
+                                .indexOfFirst { it.url == ch.url }
+                                .takeIf { it >= 0 }
+                                ?.plus(1)
+                        },
+                        resumeMs = mainViewModel.resumeFor(it.url),
+                        sleepMinutes = mainViewModel.sleepTimerMinutes.value,
+                        onBack = { mainViewModel.stopPlayback() },
+                        onZap = if (it.isLive) {
+                            { delta -> mainViewModel.zapChannel(delta) }
+                        } else null,
+                        onSwapLast = if (it.isLive) {
+                            { mainViewModel.swapToPreviousChannel() }
+                        } else null,
+                        onCycleSleep = { mainViewModel.cycleSleepTimer() },
+                        onSaveResume = { url, position, duration -> mainViewModel.saveResume(url, position, duration) }
+                    )
+                }
 
-        selectedVod != null -> VodDetailScreen(mainViewModel)
+                "vod_detail" -> VodDetailScreen(mainViewModel)
 
-        selectedSeries != null -> EpisodesScreen(mainViewModel)
+                "series_detail" -> EpisodesScreen(mainViewModel)
 
-        // MainScreen ist die Shell: Navigations-Rail links + aktiver Bereich rechts.
-        else -> MainScreen(mainViewModel)
+                else -> MainScreen(mainViewModel)
+            }
+        }
     }
 }

@@ -225,6 +225,10 @@ class PlaylistRepository(private val context: Context) {
         }
     }
 
+    suspend fun clearEpgCache() = withContext(Dispatchers.IO) {
+        if (epgCacheFile.exists()) epgCacheFile.delete()
+    }
+
     /** Lädt den EPG-Cache, falls vorhanden und jünger als [maxAgeMs]; sonst null. */
     suspend fun loadEpgCache(
         maxAgeMs: Long

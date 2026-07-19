@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -78,12 +79,12 @@ fun NavRail(
             .focusRestorer()
             .focusGroup()
             .onFocusChanged { railFocused = it.hasFocus }
-            .padding(horizontal = 12.dp, vertical = 20.dp),
+            .padding(horizontal = 8.dp, vertical = 20.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.padding(start = 10.dp, bottom = 24.dp)
+            modifier = Modifier.padding(start = 12.dp, bottom = 24.dp)
         ) {
             Image(
                 painter = painterResource(R.drawable.ic_launcher),
@@ -91,7 +92,7 @@ fun NavRail(
                 modifier = Modifier.size(32.dp)
             )
             if (railFocused) {
-                Spacer(Modifier.width(10.dp))
+                Spacer(Modifier.width(12.dp))
                 Text(
                     text = "ZekIPTV",
                     style = MaterialTheme.typography.titleLarge,
@@ -125,19 +126,17 @@ private fun RailItem(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            // Rand-Guard: LINKS am linken Bildschirmrand darf den Fokus nicht verlieren.
+            .padding(horizontal = if (expanded) 4.dp else 2.dp)
             .focusProperties { left = FocusRequester.Cancel }
             .tvFocusFrame(
                 onClick = onClick,
-                shape = RoundedCornerShape(10.dp),
-                restColor = if (selected) {
-                    MaterialTheme.colorScheme.secondaryContainer
-                } else {
-                    Color.Transparent
-                }
+                shape = CircleShape,
+                restColor = Color.Transparent,
+                isSelected = selected
             )
-            .padding(horizontal = 12.dp, vertical = 11.dp),
-        verticalAlignment = Alignment.CenterVertically
+            .padding(horizontal = if (expanded) 12.dp else 0.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = if (expanded) Arrangement.Start else Arrangement.Center
     ) {
         Icon(
             painter = painterResource(entry.iconRes),

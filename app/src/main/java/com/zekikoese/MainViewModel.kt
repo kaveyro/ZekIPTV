@@ -651,11 +651,28 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             epgNameToId = result.nameToId
             epgTick.value = System.currentTimeMillis()
             repository.saveEpgCache(result.programmes, result.nameToId)
+
             val programmeCount = result.programmes.values.sumOf { it.size }
+            // Statistik: Wie viele Kanäle der Playlist haben jetzt EPG-Daten?
+            val matchedCount = channels.count { channel ->
+                channel.tvgId?.lowercase() in result.programmes ||
+                    result.nameToId.containsKey(normalizeChannelName(channel.name))
+            }
+
             epgInfo.value = buildString {
-                append("EPG: $programmeCount Sendungen für ${result.programmes.size} Sender geladen.")
+                append("EPG: $programmeCount Sendungen für $matchedCount von ${channels.size} Sendern geladen.")
                 if (result.failedSources > 0) append(" ${result.failedSources} Quelle(n) fehlgeschlagen.")
             }
+        }
+    }
+
+    fun clearEpgCache() {
+        viewModelScope.launch {
+            repository.clearEpgCache()
+            epgData = emptyMap()
+            epgNameToId = emptyMap()
+            epgTick.value = System.currentTimeMillis()
+            epgInfo.value = "EPG-Cache wurde gelöscht."
         }
     }
 

@@ -38,6 +38,23 @@ class XmltvParserTest {
     }
 
     @Test
+    fun `parses programme within window for wanted channel id inside tv root`() {
+        val result = parse(
+            """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <tv generator-info-name="Example">
+              <programme start="20260710113000 +0000" stop="20260710123000 +0000" channel="daserste.de">
+                <title>Tagesschau</title>
+              </programme>
+            </tv>
+            """.trimIndent(),
+            wantedIds = setOf("daserste.de")
+        )
+        assertEquals(1, result.programmes["daserste.de"]?.size)
+        assertEquals("Tagesschau", result.programmes["daserste.de"]?.first()?.title)
+    }
+
+    @Test
     fun `matches channel by normalized display name when tvg-id is a hash`() {
         val result = parse(
             """
@@ -114,6 +131,66 @@ class XmltvParserTest {
         val programme = result.programmes["zdf.de"]?.first()
         assertEquals("heute", programme?.title)
         assertTrue(programme!!.startMs <= nowMs && nowMs < programme.stopMs)
+    }
+
+    @Test
+    fun `infers stop time from next programme when stop is missing`() {
+        val result = parse(
+            """
+            <tv>
+              <programme start="20260710110000 +0000" channel="zdf.de">
+                <title>Erste Sendung</title>
+              </programme>
+              <programme start="20260710123000 +0000" channel="zdf.de">
+                <title>Zweite Sendung</title>
+              </programme>
+            </tv>
+            """.trimIndent(),
+            wantedIds = setOf("zdf.de")
+        )
+        val list = result.programmes["zdf.de"]!!
+        assertEquals(2, list.size)
+        // Erste Sendung muss nun genau um 12:30 enden (Start der zweiten)
+        assertEquals(utc("20260710123000"), list[0].stopMs)
+    }
+
+    @Test
+    fun `handles timezone offset with colon`() {
+        val result = parse(
+            """
+            <tv>
+              <programme start="20260710133000+02:00" stop="20260710143000+02:00" channel="zdf.de">
+                <title>heute</title>
+              </programme>
+            </tv>
+            """.trimIndent(),
+            wantedIds = setOf("zdf.de")
+        )
+        val programme = result.programmes["zdf.de"]?.first()
+        assertEquals("heute", programme?.title)
+    }
+
+    @Test
+    fun `skips unknown tags and deep elements`() {
+        val result = parse(
+            """
+            <tv>
+              <channel id="daserste.de">
+                <display-name>Das Erste</display-name>
+                <icon src="http://example.com/logo.png" />
+                <extra><nested>data</nested></extra>
+              </channel>
+              <programme start="20260710113000 +0000" stop="20260710123000 +0000" channel="DasErste.de">
+                <title>Tagesschau</title>
+                <desc lang="de">Nachrichten</desc>
+                <category>News</category>
+              </programme>
+            </tv>
+            """.trimIndent(),
+            wantedIds = setOf("daserste.de")
+        )
+        assertEquals(1, result.programmes["daserste.de"]?.size)
+        assertEquals("Tagesschau", result.programmes["daserste.de"]?.first()?.title)
     }
 
     @Test

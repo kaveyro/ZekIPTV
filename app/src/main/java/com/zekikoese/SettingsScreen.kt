@@ -1,6 +1,5 @@
 package com.zekikoese
 
-import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -21,7 +20,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -31,15 +29,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.focus.FocusDirection
-import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.key.Key
-import androidx.compose.ui.input.key.KeyEventType
-import androidx.compose.ui.input.key.key
-import androidx.compose.ui.input.key.onPreviewKeyEvent
-import androidx.compose.ui.input.key.type
-import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -47,19 +37,14 @@ import com.zekikoese.ui.tvFocusFrame
 
 /** Kuratierte, frei verfügbare XMLTV-EPG-Quellen für den Schnell-Adder. */
 private val FREE_EPG_SOURCES = listOf(
-    "Deutschland" to "https://epgshare01.online/epgshare01/epg_ripper_DE1.xml.gz",
-    "Österreich" to "https://epgshare01.online/epgshare01/epg_ripper_AT1.xml.gz",
-    "Schweiz" to "https://epgshare01.online/epgshare01/epg_ripper_CH1.xml.gz",
-    "Türkei" to "https://epgshare01.online/epgshare01/epg_ripper_TR1.xml.gz",
-    "Großbritannien" to "https://epgshare01.online/epgshare01/epg_ripper_UK1.xml.gz",
-    "USA" to "https://epgshare01.online/epgshare01/epg_ripper_US1.xml.gz",
-    // Alternative Quelle: iptv-epg.org (https://iptv-epg.org/guides)
-    "Deutschland (iptv-epg.org)" to "https://iptv-epg.org/files/epg-de.xml.gz",
-    "Österreich (iptv-epg.org)" to "https://iptv-epg.org/files/epg-at.xml.gz",
-    "Schweiz (iptv-epg.org)" to "https://iptv-epg.org/files/epg-ch.xml.gz",
-    "Türkei (iptv-epg.org)" to "https://iptv-epg.org/files/epg-tr.xml.gz",
-    "Großbritannien (iptv-epg.org)" to "https://iptv-epg.org/files/epg-gb.xml.gz",
-    "USA (iptv-epg.org)" to "https://iptv-epg.org/files/epg-us.xml.gz",
+    "Deutschland (epgshare)" to "https://epgshare01.online/epgshare01/epg_ripper_DE1.xml.gz",
+    "Deutschland (free-epg)" to "https://www.free-epg.de/api/epg/de.xml.gz",
+    "Österreich" to "https://www.free-epg.de/api/epg/at.xml.gz",
+    "Schweiz" to "https://www.free-epg.de/api/epg/ch.xml.gz",
+    "Türkei (epg.pw)" to "https://epg.pw/xmltv/guide/tr.xml",
+    "UK (EPGTalk)" to "https://raw.githubusercontent.com/acidjesuz/EPGTalk/master/UK_guide.xml.gz",
+    "USA (US2)" to "https://epgshare01.online/epgshare01/epg_ripper_US2.xml.gz",
+    "USA (EPGTalk)" to "https://raw.githubusercontent.com/acidjesuz/EPGTalk/master/US_guide.xml.gz",
 )
 
 @OptIn(ExperimentalFoundationApi::class, ExperimentalLayoutApi::class)
@@ -73,28 +58,11 @@ fun SettingsScreen(mainViewModel: MainViewModel) {
     val allGroups by mainViewModel.allGroups
     val hiddenGroups by mainViewModel.hiddenGroups
 
-    var newName by remember { mutableStateOf("") }
-    var newUrl by remember { mutableStateOf("") }
-    var newEpgUrl by remember { mutableStateOf("") }
-
-    val focusManager = LocalFocusManager.current
-    // Textfelder verschlucken DPAD hoch/runter für die Cursor-Steuerung und werden so zur
-    // Fokus-Falle. Hoch/runter reichen den Fokus deshalb explizit an das nächste/vorherige
-    // Element weiter; links/rechts bleiben für die Cursor-Bewegung im Feld.
-    val escapeVerticalOnDpad = Modifier.onPreviewKeyEvent { event ->
-        if (event.type == KeyEventType.KeyDown) {
-            when (event.key) {
-                Key.DirectionDown -> { focusManager.moveFocus(FocusDirection.Down); true }
-                Key.DirectionUp -> { focusManager.moveFocus(FocusDirection.Up); true }
-                else -> false
-            }
-        } else {
-            false
-        }
-    }
+    var showPlaylistDialog by remember { mutableStateOf(false) }
+    var showEpgDialog by remember { mutableStateOf(false) }
 
     LazyColumn(
-        modifier = Modifier.fillMaxSize().padding(horizontal = 28.dp, vertical = 24.dp),
+        modifier = Modifier.fillMaxSize().padding(start = 16.dp, end = 32.dp, top = 24.dp, bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         item {
@@ -108,9 +76,11 @@ fun SettingsScreen(mainViewModel: MainViewModel) {
         // ---------- Playlists ----------
         item { SectionTitle("Playlists") }
         items(playlists, key = { it.url + it.name }) { entry ->
+            val isActive = entry.url == activeUrl
             SettingsRow(
-                title = if (entry.url == activeUrl) "${entry.name}   ✓ aktiv" else entry.name,
+                title = if (isActive) "${entry.name}   ✓" else entry.name,
                 subtitle = entry.url,
+                isSelected = isActive,
                 onClick = {
                     mainViewModel.selectPlaylist(entry)
                     mainViewModel.navigate(NavDestination.LIVE)
@@ -126,34 +96,13 @@ fun SettingsScreen(mainViewModel: MainViewModel) {
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
             )
         }
-        // Felder untereinander (statt nebeneinander): so führt hoch/runter sauber
-        // durch Name → URL → Button, ohne dass links/rechts nötig ist.
         item {
-            OutlinedTextField(
-                value = newName,
-                onValueChange = { newName = it },
-                label = { Text("Name") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth().then(escapeVerticalOnDpad)
+            TvButton(
+                text = "Neue Playlist hinzufügen...",
+                onClick = { showPlaylistDialog = true },
+                containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                contentColor = MaterialTheme.colorScheme.onSecondaryContainer
             )
-        }
-        item {
-            OutlinedTextField(
-                value = newUrl,
-                onValueChange = { newUrl = it },
-                label = { Text("M3U-URL") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth().then(escapeVerticalOnDpad)
-            )
-        }
-        item {
-            Button(
-                onClick = {
-                    mainViewModel.addPlaylist(newName, newUrl)
-                    newName = ""
-                    newUrl = ""
-                }
-            ) { Text("Playlist hinzufügen") }
         }
 
         // ---------- Design ----------
@@ -240,8 +189,14 @@ fun SettingsScreen(mainViewModel: MainViewModel) {
         item { SectionTitle("Backup") }
         item {
             Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                Button(onClick = { mainViewModel.exportBackup() }) { Text("Backup exportieren") }
-                Button(onClick = { mainViewModel.importBackup() }) { Text("Backup importieren") }
+                TvButton(
+                    text = "Backup exportieren",
+                    onClick = { mainViewModel.exportBackup() }
+                )
+                TvButton(
+                    text = "Backup importieren",
+                    onClick = { mainViewModel.importBackup() }
+                )
             }
         }
         item {
@@ -300,23 +255,20 @@ fun SettingsScreen(mainViewModel: MainViewModel) {
             }
         }
         item {
-            OutlinedTextField(
-                value = newEpgUrl,
-                onValueChange = { newEpgUrl = it },
-                label = { Text("Eigene XMLTV-URL (.xml oder .xml.gz)") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth().then(escapeVerticalOnDpad)
-            )
-        }
-        item {
             Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                Button(
-                    onClick = {
-                        mainViewModel.addEpgSource(newEpgUrl)
-                        newEpgUrl = ""
-                    }
-                ) { Text("Hinzufügen") }
-                Button(onClick = { mainViewModel.refreshEpg() }) { Text("EPG aktualisieren") }
+                TvButton(
+                    text = "Eigene Quelle hinzufügen...",
+                    onClick = { showEpgDialog = true },
+                    containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                    contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+                )
+                TvButton(text = "EPG aktualisieren", onClick = { mainViewModel.refreshEpg() })
+                TvButton(
+                    text = "Cache löschen",
+                    onClick = { mainViewModel.clearEpgCache() },
+                    containerColor = MaterialTheme.colorScheme.errorContainer,
+                    contentColor = MaterialTheme.colorScheme.onErrorContainer
+                )
             }
         }
         if (epgInfo.isNotEmpty()) {
@@ -325,6 +277,21 @@ fun SettingsScreen(mainViewModel: MainViewModel) {
             }
         }
         item { Spacer(Modifier.height(24.dp)) }
+    }
+
+    if (showPlaylistDialog) {
+        PlaylistInputDialog(
+            onConfirm = { name, url -> mainViewModel.addPlaylist(name, url) },
+            onDismiss = { showPlaylistDialog = false }
+        )
+    }
+    if (showEpgDialog) {
+        SingleTextInputDialog(
+            title = "EPG-Quelle hinzufügen",
+            label = "XMLTV-URL (.xml oder .xml.gz)",
+            onConfirm = { url -> mainViewModel.addEpgSource(url) },
+            onDismiss = { showEpgDialog = false }
+        )
     }
 }
 
@@ -344,13 +311,19 @@ private fun SectionTitle(title: String) {
 private fun SettingsRow(
     title: String,
     subtitle: String?,
+    isSelected: Boolean = false,
     onClick: () -> Unit,
     onLongClick: (() -> Unit)? = null
 ) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .tvFocusFrame(onClick = onClick, onLongClick = onLongClick)
+            .tvFocusFrame(
+                onClick = onClick,
+                onLongClick = onLongClick,
+                isSelected = isSelected,
+                restColor = Color.Transparent
+            )
             .padding(horizontal = 16.dp, vertical = 12.dp)
     ) {
         Text(

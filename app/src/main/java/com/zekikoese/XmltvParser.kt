@@ -51,7 +51,7 @@ fun normalizeChannelName(raw: String): String {
  */
 class XmltvParser(
     private val nowMs: Long = System.currentTimeMillis(),
-    private val pastWindowMs: Long = 2L * 60 * 60 * 1000,     // 2 h zurück
+    private val pastWindowMs: Long = 6L * 60 * 60 * 1000,     // 6 h zurück
     private val futureWindowMs: Long = 36L * 60 * 60 * 1000   // 36 h voraus
 ) {
 
@@ -74,7 +74,8 @@ class XmltvParser(
         while (event != XmlPullParser.END_DOCUMENT) {
             if (event == XmlPullParser.START_TAG) {
                 when (parser.name) {
-                    // <channel id="X"><display-name>Name</display-name>...</channel>
+                    "tv" -> { /* Root-Tag: einfach weiter zum Inhalt */ }
+
                     "channel" -> {
                         val id = parser.getAttributeValue(null, "id")?.lowercase()
                         if (id != null) {
@@ -87,13 +88,21 @@ class XmltvParser(
                                     if (normalized in wantedNames) nameToId[normalized] = id
                                 }
                             }
+                        } else {
+                            skipElement(parser)
                         }
                     }
 
                     "programme" -> {
                         val channelId = parser.getAttributeValue(null, "channel")?.lowercase()
                         val start = parseTime(parser.getAttributeValue(null, "start"))
-                        val stop = parseTime(parser.getAttributeValue(null, "stop"))
+                        var stop = parseTime(parser.getAttributeValue(null, "stop"))
+
+                        // Falls Stop-Zeit fehlt: temporär 4h annehmen, wird später korrigiert.
+                        if (start != null && stop == null) {
+                            stop = start + 4 * 60 * 60 * 1000
+                        }
+
                         val relevant = channelId != null &&
                             (channelId in wantedChannelIds || channelId in resolvedIds) &&
                             start != null && stop != null &&
@@ -104,15 +113,35 @@ class XmltvParser(
                                 programmes.getOrPut(channelId!!) { mutableListOf() }
                                     .add(EpgProgramme(channelId, start!!, stop!!, title))
                             }
+                        } else {
+                            skipElement(parser)
                         }
                     }
+                    else -> skipElement(parser)
                 }
             }
             event = parser.next()
         }
 
-        programmes.values.forEach { it.sortBy(EpgProgramme::startMs) }
+        programmes.values.forEach { list ->
+            list.sortBy(EpgProgramme::startMs)
+            inferStopTimes(list)
+        }
         return XmltvResult(programmes, nameToId)
+    }
+
+    /** Hilfsmethode zum Überspringen nicht benötigter Tags samt Inhalt. */
+    private fun skipElement(parser: XmlPullParser) {
+        if (parser.eventType != XmlPullParser.START_TAG) return
+        var depth = 1
+        while (depth > 0) {
+            val next = try { parser.next() } catch (e: Exception) { XmlPullParser.END_DOCUMENT }
+            when (next) {
+                XmlPullParser.START_TAG -> depth++
+                XmlPullParser.END_TAG -> depth--
+                XmlPullParser.END_DOCUMENT -> return
+            }
+        }
     }
 
     /** Liest alle <display-name>-Einträge innerhalb des aktuellen <channel>-Elements. */
@@ -120,8 +149,12 @@ class XmltvParser(
         val names = mutableListOf<String>()
         var event = parser.next()
         while (!(event == XmlPullParser.END_TAG && parser.name == "channel")) {
-            if (event == XmlPullParser.START_TAG && parser.name == "display-name") {
-                parser.nextText().trim().ifEmpty { null }?.let(names::add)
+            if (event == XmlPullParser.START_TAG) {
+                if (parser.name == "display-name") {
+                    parser.nextText().trim().ifEmpty { null }?.let(names::add)
+                } else {
+                    skipElement(parser)
+                }
             }
             event = parser.next()
         }
@@ -133,8 +166,12 @@ class XmltvParser(
         var title: String? = null
         var event = parser.next()
         while (!(event == XmlPullParser.END_TAG && parser.name == "programme")) {
-            if (event == XmlPullParser.START_TAG && parser.name == "title" && title == null) {
-                title = parser.nextText().trim().ifEmpty { null }
+            if (event == XmlPullParser.START_TAG) {
+                if (parser.name == "title" && title == null) {
+                    title = parser.nextText().trim().ifEmpty { null }
+                } else {
+                    skipElement(parser)
+                }
             }
             event = parser.next()
         }
@@ -146,8 +183,10 @@ class XmltvParser(
         if (raw == null || raw.length < 14) return null
         return runCatching {
             if (raw.length > 14) {
-                // Zeitzonen-Teil normalisieren: Leerzeichen zwischen Datum und Offset erzwingen.
-                val normalized = raw.substring(0, 14) + " " + raw.substring(14).trim()
+                // Zeitzonen-Teil normalisieren: Leerzeichen erzwingen und Doppelpunkt im Offset (+HH:MM) entfernen.
+                val datePart = raw.substring(0, 14)
+                val tzPart = raw.substring(14).trim().replace(":", "")
+                val normalized = "$datePart $tzPart"
                 SimpleDateFormat("yyyyMMddHHmmss Z", Locale.US).parse(normalized)!!.time
             } else {
                 SimpleDateFormat("yyyyMMddHHmmss", Locale.US)
@@ -162,5 +201,24 @@ class XmltvParser(
     } catch (e: Exception) {
         // Fallback für JVM-Unit-Tests, falls die Factory-Discovery fehlschlägt.
         Class.forName("org.kxml2.io.KXmlParser").getDeclaredConstructor().newInstance() as XmlPullParser
+    }
+
+    companion object {
+        /**
+         * Schließt Lücken: Wenn eine Sendung keine Endzeit hat (oder diese unrealistisch weit
+         * in der Zukunft liegt), wird sie auf den Beginn der nächsten Sendung gesetzt.
+         */
+        fun inferStopTimes(list: MutableList<EpgProgramme>) {
+            if (list.size < 2) return
+            for (i in 0 until list.size - 1) {
+                val current = list[i]
+                val next = list[i + 1]
+                // Falls die aktuelle Sendung nach der nächsten endet (oder genau dann),
+                // kürzen wir sie auf den Start der nächsten.
+                if (current.stopMs > next.startMs) {
+                    list[i] = current.copy(stopMs = next.startMs)
+                }
+            }
+        }
     }
 }
