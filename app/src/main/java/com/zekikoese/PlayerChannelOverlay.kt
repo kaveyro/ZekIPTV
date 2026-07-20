@@ -16,11 +16,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -48,12 +45,12 @@ import kotlinx.coroutines.android.awaitFrame
 private const val OVERLAY_PAGE_JUMP = 10
 
 /**
- * Senderlisten-Overlay im Player (öffnet mit DPAD-LINKS bei Live-Wiedergabe, auf dem
- * Smartphone über den Senderlisten-Button): Zappen ohne den Player zu verlassen.
- * TV: links eine vertikale Gruppen-Spalte (Filter greift beim Fokussieren), rechts die
- * Senderliste — wie im Live-TV-Bereich. Smartphone: einspaltiges Panel mit antippbarem
- * Kategorie-Picker über der Liste. Der Gruppenfilter wird im ViewModel gemerkt und
- * überlebt Schließen/Öffnen des Overlays; der Filter des Live-Bereichs bleibt unangetastet.
+ * Senderlisten-Overlay im Player (öffnet mit DPAD-LINKS bei Live-Wiedergabe): Zappen ohne den
+ * Player zu verlassen. Nur auf dem TV — auf dem Smartphone entfällt das Overlay bewusst
+ * (Senderwechsel per Zap-Buttons bzw. Zurück zur Live-Liste). Links eine vertikale Gruppen-Spalte
+ * (Filter greift beim Fokussieren), rechts die Senderliste — wie im Live-TV-Bereich. Der
+ * Gruppenfilter wird im ViewModel gemerkt und überlebt Schließen/Öffnen des Overlays; der Filter
+ * des Live-Bereichs bleibt unangetastet.
  */
 @Composable
 fun PlayerChannelOverlay(
@@ -200,31 +197,6 @@ fun PlayerChannelOverlay(
                         )
                         channelList()
                     }
-                }
-            } else {
-                // Smartphone: einspaltiges Panel — Kategorie-Picker über der Senderliste.
-                Column(
-                    modifier = Modifier
-                        .fillMaxHeight()
-                        .fillMaxWidth(0.92f)
-                        .widthIn(max = 400.dp)
-                        .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.96f))
-                        .padding(16.dp)
-                ) {
-                    Text(
-                        text = "Senderliste",
-                        style = MaterialTheme.typography.titleLarge,
-                        modifier = Modifier.padding(bottom = 12.dp)
-                    )
-                    if (groups.isNotEmpty()) {
-                        PhoneCategoryPicker(
-                            entries = categoryEntries,
-                            selectedKey = group,
-                            onSelect = { mainViewModel.playerOverlayGroup.value = it }
-                        )
-                        Spacer(Modifier.height(12.dp))
-                    }
-                    channelList()
                 }
             }
 

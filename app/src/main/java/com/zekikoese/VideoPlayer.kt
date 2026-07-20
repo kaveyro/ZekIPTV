@@ -1,5 +1,7 @@
 package com.zekikoese
 
+import android.app.Activity
+import android.content.pm.ActivityInfo
 import android.view.KeyEvent
 import androidx.activity.compose.BackHandler
 import androidx.annotation.OptIn
@@ -13,11 +15,13 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
@@ -40,11 +44,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.media3.common.AudioAttributes
@@ -186,6 +194,28 @@ fun VideoPlayer(
 
     // Hardware-Zurück-Taste der Fernbedienung kehrt zur Liste zurück.
     BackHandler(onBack = onBack)
+
+    // Smartphone: Wiedergabe im immersiven Vollbild — Status-/Navigationsleiste ausblenden und
+    // ins Querformat drehen, damit das Bild den ganzen Schirm nutzt. Beim Verlassen zurücksetzen.
+    // (Auf dem TV läuft ohnehin Vollbild-Querformat, daher nur für Touch-Geräte.)
+    if (!isTv) {
+        val activity = context as? Activity
+        DisposableEffect(Unit) {
+            val previousOrientation = activity?.requestedOrientation
+            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            val controller = activity?.window?.let {
+                WindowCompat.getInsetsController(it, it.decorView)
+            }
+            controller?.systemBarsBehavior =
+                WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            controller?.hide(WindowInsetsCompat.Type.systemBars())
+            onDispose {
+                controller?.show(WindowInsetsCompat.Type.systemBars())
+                activity?.requestedOrientation =
+                    previousOrientation ?: ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            }
+        }
+    }
 
     // HOME/Standby: Wiedergabe pausieren; bei Rückkehr fortsetzen. Ressourcen freigeben.
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -388,9 +418,21 @@ fun VideoPlayer(
             }
         }
 
+        // Smartphone: sichtbarer Zurück-Button oben links (verlässt die Wiedergabe) — erscheint
+        // zusammen mit der Transportleiste.
+        if (!isTv && controllerVisible.value && !showChannelList.value) {
+            PhoneBackButton(
+                onClick = onBack,
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(12.dp)
+            )
+        }
+
         // Smartphone: Touch-Buttons für die sonst nur per Fernbedienung erreichbaren
-        // Funktionen (Senderliste, Programm-Info, Zappen, Wiedergabe-Menü). Erscheinen
-        // zusammen mit der Transportleiste (Tippen auf das Bild).
+        // Funktionen (Programm-Info, Zappen, Wiedergabe-Menü). Erscheinen zusammen mit der
+        // Transportleiste (Tippen auf das Bild). Die früher hier verankerte Senderliste
+        // entfällt auf dem Handy — Senderwechsel per Zap-Buttons bzw. Zurück zur Live-Liste.
         if (!isTv && controllerVisible.value && !showChannelList.value) {
             Row(
                 modifier = Modifier
@@ -402,13 +444,6 @@ fun VideoPlayer(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 if (media.isLive) {
-                    IconButton(onClick = { showChannelList.value = true }) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Filled.List,
-                            contentDescription = "Senderliste",
-                            tint = Color.White
-                        )
-                    }
                     IconButton(onClick = { infoTrigger.value++ }) {
                         Icon(
                             imageVector = Icons.Filled.Info,
@@ -443,8 +478,9 @@ fun VideoPlayer(
             }
         }
 
-        // Senderliste als Overlay (nur Live): Zappen ohne den Player zu verlassen.
-        if (media.isLive) {
+        // Senderliste als Overlay (nur Live, nur TV): Zappen per D-Pad ohne den Player zu
+        // verlassen. Auf dem Handy entfällt das Overlay bewusst (Zap-Buttons / Zurück zur Liste).
+        if (media.isLive && isTv) {
             PlayerChannelOverlay(
                 visible = showChannelList.value,
                 mainViewModel = mainViewModel,
@@ -498,25 +534,37 @@ private fun PlayerMenuDialog(
     // Ton- und Untertitelspuren beim Öffnen einlesen.
     val audioGroups = remember { exoPlayer.currentTracks.groups.filter { it.type == C.TRACK_TYPE_AUDIO } }
     val textGroups = remember { exoPlayer.currentTracks.groups.filter { it.type == C.TRACK_TYPE_TEXT } }
+    // Senderwechsel gehört nur ins TV-Menü (D-Pad-Bedienung). Auf dem Handy erledigen die
+    // Zap-Buttons direkt im Player das — die Einträge wären dort redundant.
+    val isTv = LocalIsTv.current
+    // Bei vielen Ton-/Untertitelspuren kann das Menü länger als der Bildschirm werden —
+    // daher scrollbar und in der Höhe auf 90 % der Bildschirmhöhe begrenzt.
+    val menuScroll = rememberScrollState()
+    val maxMenuHeight = (LocalConfiguration.current.screenHeightDp * 0.9f).dp
 
     Dialog(onDismissRequest = onDismiss) {
         Surface(
             shape = RoundedCornerShape(16.dp),
             color = MaterialTheme.colorScheme.surface
         ) {
-            Column(modifier = Modifier.padding(24.dp)) {
+            Column(
+                modifier = Modifier
+                    .heightIn(max = maxMenuHeight)
+                    .verticalScroll(menuScroll)
+                    .padding(24.dp)
+            ) {
                 Text(
                     "Wiedergabe",
                     style = MaterialTheme.typography.titleLarge,
                     modifier = Modifier.padding(bottom = 12.dp)
                 )
 
-                // Senderwechsel (nur Live) — konfliktfrei per Menü statt DPAD.
-                if (onZap != null) {
+                // Senderwechsel (nur Live, nur TV) — konfliktfrei per Menü statt DPAD.
+                if (isTv && onZap != null) {
                     MenuRow(label = "▲ Nächster Sender", onClick = { onZap(+1); onDismiss() })
                     MenuRow(label = "▼ Vorheriger Sender", onClick = { onZap(-1); onDismiss() })
                 }
-                if (onSwapLast != null) {
+                if (isTv && onSwapLast != null) {
                     MenuRow(label = "↩ Zuletzt gesehener Sender", onClick = { onSwapLast(); onDismiss() })
                 }
 

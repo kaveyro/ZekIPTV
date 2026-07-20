@@ -11,9 +11,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.NavigationBar
@@ -28,12 +32,39 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
 private data class PhoneNavEntry(val dest: NavDestination, val label: String, val iconRes: Int)
+
+/**
+ * Sichtbarer Zurück-Button für die Touch-Bedienung (Player, Detailseiten) — auf dem TV
+ * übernimmt die Fernbedienung diese Rolle, dort wird er nicht angezeigt. Die Farben sind
+ * parametrierbar: über Video weiß auf dunklem Kreis, über normalem Hintergrund theme-abhängig.
+ */
+@Composable
+fun PhoneBackButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    tint: Color = Color.White,
+    container: Color = Color.Black.copy(alpha = 0.45f)
+) {
+    IconButton(
+        onClick = onClick,
+        modifier = modifier
+            .clip(CircleShape)
+            .background(container)
+    ) {
+        Icon(
+            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+            contentDescription = "Zurück",
+            tint = tint
+        )
+    }
+}
 
 /**
  * Smartphone-Shell: material3-Scaffold mit unterer Navigationsleiste statt der TV-Rail.

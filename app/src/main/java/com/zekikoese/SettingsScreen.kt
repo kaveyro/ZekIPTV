@@ -196,7 +196,11 @@ fun SettingsScreen(mainViewModel: MainViewModel) {
         // ---------- Backup ----------
         item { SectionTitle("Backup", icon = Icons.Filled.Info) }
         item {
-            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            // FlowRow statt Row: im Hochformat umbrechen, damit kein Button aus dem Bild rutscht.
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
                 TvButton(
                     text = "Backup exportieren",
                     onClick = { mainViewModel.exportBackup() }
@@ -263,7 +267,12 @@ fun SettingsScreen(mainViewModel: MainViewModel) {
             }
         }
         item {
-            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            // FlowRow statt Row: im Hochformat umbrechen, damit „Cache löschen" nicht rechts
+            // aus dem Bild rutscht.
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
                 TvButton(
                     text = "Eigene Quelle hinzufügen...",
                     onClick = { showEpgDialog = true },

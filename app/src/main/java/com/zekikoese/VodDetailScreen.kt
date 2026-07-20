@@ -21,6 +21,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
@@ -82,6 +83,12 @@ fun VodDetailScreen(mainViewModel: MainViewModel) {
                 vodUrl = vodUrl,
                 resumeMs = resumeMs,
                 isFavorite = isFavorite
+            )
+            PhoneBackButton(
+                onClick = { mainViewModel.closeVod() },
+                modifier = Modifier.align(Alignment.TopStart).padding(12.dp),
+                tint = MaterialTheme.colorScheme.onSurface,
+                container = MaterialTheme.colorScheme.surface.copy(alpha = 0.6f)
             )
             return@Box
         }
@@ -201,7 +208,8 @@ private fun PhoneVodDetailContent(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(20.dp)
+            // Oben Platz für den überlagerten Zurück-Button lassen.
+            .padding(start = 20.dp, end = 20.dp, top = 64.dp, bottom = 20.dp)
     ) {
         if (vod.icon != null) {
             AsyncImage(

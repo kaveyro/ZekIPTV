@@ -36,6 +36,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
+import com.zekikoese.ui.LocalIsTv
 import com.zekikoese.ui.tvFocusFrame
 
 /** Episodenliste einer Serie (nach Staffel/Episode sortiert), komplett D-Pad-bedienbar. */
@@ -49,6 +50,7 @@ fun EpisodesScreen(mainViewModel: MainViewModel) {
     val favorites by mainViewModel.favorites
 
     val isFavorite = series?.let { mainViewModel.seriesFavKey(it) in favorites } ?: false
+    val isTv = LocalIsTv.current
 
     // Zurück-Taste schließt die Episodenliste.
     BackHandler { mainViewModel.closeSeries() }
@@ -78,7 +80,12 @@ fun EpisodesScreen(mainViewModel: MainViewModel) {
             )
         }
 
-    Column(modifier = Modifier.fillMaxSize().padding(28.dp)) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            // Handy: oben Platz für den überlagerten Zurück-Button lassen.
+            .padding(start = 28.dp, end = 28.dp, top = if (isTv) 28.dp else 64.dp, bottom = 28.dp)
+    ) {
         Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             if (series?.cover != null) {
                 AsyncImage(
@@ -160,6 +167,16 @@ fun EpisodesScreen(mainViewModel: MainViewModel) {
             }
         }
     }
+
+        // Smartphone: sichtbarer Zurück-Button oben links.
+        if (!isTv) {
+            PhoneBackButton(
+                onClick = { mainViewModel.closeSeries() },
+                modifier = Modifier.align(Alignment.TopStart).padding(12.dp),
+                tint = MaterialTheme.colorScheme.onSurface,
+                container = MaterialTheme.colorScheme.surface.copy(alpha = 0.6f)
+            )
+        }
     }
 }
 

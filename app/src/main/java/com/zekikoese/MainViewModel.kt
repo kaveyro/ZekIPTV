@@ -485,6 +485,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** Pull-to-Refresh (Handy): Playlist + EPG neu laden. */
+    fun refreshLive() {
+        loadPlaylist()
+        refreshEpg()
+    }
+
+    /** Pull-to-Refresh (Handy): Film-Katalog neu vom Anbieter laden. */
+    fun refreshMovies() = loadVod()
+
+    /** Pull-to-Refresh (Handy): Serien-Katalog neu vom Anbieter laden. */
+    fun refreshSeries() = loadSeries()
+
     fun selectVodCategory(categoryId: String?) {
         selectedVodCategory.value = categoryId
     }

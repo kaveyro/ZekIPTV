@@ -49,6 +49,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -169,6 +170,30 @@ fun MainScreen(mainViewModel: MainViewModel = viewModel()) {
             programmes = mainViewModel.programmesFor(epgDialogChannel!!),
             onDismiss = { mainViewModel.closeEpg() }
         )
+    }
+}
+
+/**
+ * Handy: umschließt einen scrollenden Inhalt mit Pull-to-Refresh. Auf dem TV wird der Inhalt
+ * unverändert gerendert (kein Touch, D-Pad-Fokuslogik bleibt unberührt).
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun PhoneRefreshable(
+    isRefreshing: Boolean,
+    onRefresh: () -> Unit,
+    content: @Composable () -> Unit
+) {
+    if (LocalIsTv.current) {
+        content()
+    } else {
+        PullToRefreshBox(
+            isRefreshing = isRefreshing,
+            onRefresh = onRefresh,
+            modifier = Modifier.fillMaxSize()
+        ) {
+            content()
+        }
     }
 }
 
@@ -410,6 +435,12 @@ private fun LiveScreen(
     var focusedIndex by remember { mutableStateOf(0) }
     var focusedChannel by remember { mutableStateOf<Channel?>(null) }
 
+    // Pull-to-Refresh (Handy): nur solange sichtbar, bis das Neuladen abgeschlossen ist.
+    var refreshing by remember { mutableStateOf(false) }
+    LaunchedEffect(uiState) {
+        if (uiState !is PlaylistUiState.Loading) refreshing = false
+    }
+
     LaunchedEffect(pendingListFocus, channels.size) {
         if (!pendingListFocus || channels.isEmpty()) return@LaunchedEffect
         listState.scrollToItem(targetFocusIndex)
@@ -463,64 +494,69 @@ private fun LiveScreen(
             }
 
             Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
-                when (uiState) {
-                    is PlaylistUiState.Loading -> {
-                        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            items(8) {
-                                Box(modifier = Modifier.fillMaxWidth().height(70.dp).clip(RoundedCornerShape(12.dp))) {
-                                    LoadingPlaceholder()
+                PhoneRefreshable(
+                    isRefreshing = refreshing,
+                    onRefresh = { refreshing = true; mainViewModel.refreshLive() }
+                ) {
+                    when (uiState) {
+                        is PlaylistUiState.Loading -> {
+                            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                items(8) {
+                                    Box(modifier = Modifier.fillMaxWidth().height(70.dp).clip(RoundedCornerShape(12.dp))) {
+                                        LoadingPlaceholder()
+                                    }
                                 }
                             }
                         }
-                    }
-                    is PlaylistUiState.Error -> {
-                        EmptyState(
-                            icon = Icons.Filled.Info,
-                            title = "Fehler",
-                            subtitle = (uiState as PlaylistUiState.Error).message
-                        )
-                    }
-                    else -> {
-                        if (channels.isEmpty()) {
+                        is PlaylistUiState.Error -> {
                             EmptyState(
                                 icon = Icons.Filled.Info,
-                                title = "Keine Sender",
-                                subtitle = if (hasChannels) "In dieser Kategorie gibt es keine Treffer." else "Über das Menü links unter „Einstellungen“ eine Playlist hinzufügen."
+                                title = "Fehler",
+                                subtitle = (uiState as PlaylistUiState.Error).message
                             )
-                        } else {
-                            LazyColumn(
-                                state = listState,
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .onPreviewKeyEvent { event ->
-                                        if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
-                                        when (event.key) {
-                                            Key.Menu -> focusedChannel?.let { onChannelLongPress(it); true } ?: false
-                                            Key.MediaFastForward -> { jumpBy(+PAGE_JUMP); true }
-                                            Key.MediaRewind -> { jumpBy(-PAGE_JUMP); true }
-                                            else -> false
-                                        }
-                                    },
-                                verticalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                itemsIndexed(channels) { index, channel ->
-                                    ChannelRow(
-                                        channel = channel,
-                                        isFavorite = channel.url in favorites,
-                                        epg = mainViewModel.epgFor(channel),
-                                        showGroup = selectedGroup == null,
-                                        modifier = if (index == targetFocusIndex) {
-                                            Modifier.focusRequester(listFocusRequester)
-                                        } else Modifier,
-                                        onClick = { mainViewModel.selectChannel(channel) },
-                                        onLongClick = { onChannelLongPress(channel) },
-                                        onFocusChange = { focused ->
-                                            if (focused) {
-                                                focusedIndex = index
-                                                focusedChannel = channel
+                        }
+                        else -> {
+                            if (channels.isEmpty()) {
+                                EmptyState(
+                                    icon = Icons.Filled.Info,
+                                    title = "Keine Sender",
+                                    subtitle = if (hasChannels) "In dieser Kategorie gibt es keine Treffer." else "Über das Menü links unter „Einstellungen“ eine Playlist hinzufügen."
+                                )
+                            } else {
+                                LazyColumn(
+                                    state = listState,
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .onPreviewKeyEvent { event ->
+                                            if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                                            when (event.key) {
+                                                Key.Menu -> focusedChannel?.let { onChannelLongPress(it); true } ?: false
+                                                Key.MediaFastForward -> { jumpBy(+PAGE_JUMP); true }
+                                                Key.MediaRewind -> { jumpBy(-PAGE_JUMP); true }
+                                                else -> false
                                             }
-                                        }
-                                    )
+                                        },
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    itemsIndexed(channels) { index, channel ->
+                                        ChannelRow(
+                                            channel = channel,
+                                            isFavorite = channel.url in favorites,
+                                            epg = mainViewModel.epgFor(channel),
+                                            showGroup = selectedGroup == null,
+                                            modifier = if (index == targetFocusIndex) {
+                                                Modifier.focusRequester(listFocusRequester)
+                                            } else Modifier,
+                                            onClick = { mainViewModel.selectChannel(channel) },
+                                            onLongClick = { onChannelLongPress(channel) },
+                                            onFocusChange = { focused ->
+                                                if (focused) {
+                                                    focusedIndex = index
+                                                    focusedChannel = channel
+                                                }
+                                            }
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -547,6 +583,12 @@ private fun VodContent(mainViewModel: MainViewModel) {
     val gridFocusRequester = remember { FocusRequester() }
     val pendingFocus by mainViewModel.pendingVodFocus
     val targetIndex = mainViewModel.vodFocusIndex.coerceIn(0, maxOf(0, vod.lastIndex))
+
+    // Pull-to-Refresh (Handy): sichtbar, bis der Katalog neu geladen ist.
+    var refreshing by remember { mutableStateOf(false) }
+    LaunchedEffect(contentInfo) {
+        if (!contentInfo.contains("laden", ignoreCase = true)) refreshing = false
+    }
 
     LaunchedEffect(pendingFocus, vod.size) {
         if (!pendingFocus || vod.isEmpty()) return@LaunchedEffect
@@ -596,51 +638,56 @@ private fun VodContent(mainViewModel: MainViewModel) {
             }
 
             Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
-                if (vod.isEmpty()) {
-                    if (contentInfo.contains("laden", ignoreCase = true)) {
-                        LazyVerticalGrid(
-                            columns = GridCells.Adaptive(minSize = 150.dp),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
-                            verticalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            items(10) {
-                                Box(modifier = Modifier.fillMaxWidth().aspectRatio(2f/3f).clip(RoundedCornerShape(12.dp))) {
-                                    LoadingPlaceholder()
-                                }
-                            }
-                        }
-                    } else {
-                        EmptyState(
-                            icon = Icons.Filled.Info,
-                            title = "Keine Filme",
-                            subtitle = contentInfo.ifEmpty { "In dieser Kategorie gibt es keine Treffer." }
-                        )
-                    }
-                } else {
-                    LazyVerticalGrid(
-                        state = gridState,
-                        columns = GridCells.Adaptive(minSize = 150.dp),
-                        modifier = Modifier.fillMaxSize(),
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        itemsIndexed(vod, key = { _, item -> item.id }) { index, item ->
-                            PosterCard(
-                                title = item.name,
-                                icon = item.icon,
-                                isFavorite = mainViewModel.vodFavKey(item) in favorites,
-                                modifier = if (index == targetIndex) {
-                                    Modifier.focusRequester(gridFocusRequester)
-                                } else Modifier,
-                                onClick = { mainViewModel.openVod(item) },
-                                onLongClick = { mainViewModel.toggleVodFavorite(item) },
-                                onFocusChange = { focused ->
-                                    if (focused) {
-                                        mainViewModel.vodFocusIndex = index
-                                        mainViewModel.focusedBackdrop.value = item.icon
+                PhoneRefreshable(
+                    isRefreshing = refreshing,
+                    onRefresh = { refreshing = true; mainViewModel.refreshMovies() }
+                ) {
+                    if (vod.isEmpty()) {
+                        if (contentInfo.contains("laden", ignoreCase = true)) {
+                            LazyVerticalGrid(
+                                columns = GridCells.Adaptive(minSize = 150.dp),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                verticalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                items(10) {
+                                    Box(modifier = Modifier.fillMaxWidth().aspectRatio(2f/3f).clip(RoundedCornerShape(12.dp))) {
+                                        LoadingPlaceholder()
                                     }
                                 }
+                            }
+                        } else {
+                            EmptyState(
+                                icon = Icons.Filled.Info,
+                                title = "Keine Filme",
+                                subtitle = contentInfo.ifEmpty { "In dieser Kategorie gibt es keine Treffer." }
                             )
+                        }
+                    } else {
+                        LazyVerticalGrid(
+                            state = gridState,
+                            columns = GridCells.Adaptive(minSize = 150.dp),
+                            modifier = Modifier.fillMaxSize(),
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            itemsIndexed(vod, key = { _, item -> item.id }) { index, item ->
+                                PosterCard(
+                                    title = item.name,
+                                    icon = item.icon,
+                                    isFavorite = mainViewModel.vodFavKey(item) in favorites,
+                                    modifier = if (index == targetIndex) {
+                                        Modifier.focusRequester(gridFocusRequester)
+                                    } else Modifier,
+                                    onClick = { mainViewModel.openVod(item) },
+                                    onLongClick = { mainViewModel.toggleVodFavorite(item) },
+                                    onFocusChange = { focused ->
+                                        if (focused) {
+                                            mainViewModel.vodFocusIndex = index
+                                            mainViewModel.focusedBackdrop.value = item.icon
+                                        }
+                                    }
+                                )
+                            }
                         }
                     }
                 }
@@ -665,6 +712,12 @@ private fun SeriesContent(mainViewModel: MainViewModel) {
     val gridFocusRequester = remember { FocusRequester() }
     val pendingFocus by mainViewModel.pendingSeriesFocus
     val targetIndex = mainViewModel.seriesFocusIndex.coerceIn(0, maxOf(0, series.lastIndex))
+
+    // Pull-to-Refresh (Handy): sichtbar, bis der Katalog neu geladen ist.
+    var refreshing by remember { mutableStateOf(false) }
+    LaunchedEffect(contentInfo) {
+        if (!contentInfo.contains("laden", ignoreCase = true)) refreshing = false
+    }
 
     LaunchedEffect(pendingFocus, series.size) {
         if (!pendingFocus || series.isEmpty()) return@LaunchedEffect
@@ -714,51 +767,56 @@ private fun SeriesContent(mainViewModel: MainViewModel) {
             }
 
             Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
-                if (series.isEmpty()) {
-                    if (contentInfo.contains("laden", ignoreCase = true)) {
-                        LazyVerticalGrid(
-                            columns = GridCells.Adaptive(minSize = 150.dp),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
-                            verticalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            items(10) {
-                                Box(modifier = Modifier.fillMaxWidth().aspectRatio(2f/3f).clip(RoundedCornerShape(12.dp))) {
-                                    LoadingPlaceholder()
-                                }
-                            }
-                        }
-                    } else {
-                        EmptyState(
-                            icon = Icons.Filled.Info,
-                            title = "Keine Serien",
-                            subtitle = contentInfo.ifEmpty { "In dieser Kategorie gibt es keine Treffer." }
-                        )
-                    }
-                } else {
-                    LazyVerticalGrid(
-                        state = gridState,
-                        columns = GridCells.Adaptive(minSize = 150.dp),
-                        modifier = Modifier.fillMaxSize(),
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        itemsIndexed(series, key = { _, item -> item.id }) { index, item ->
-                            PosterCard(
-                                title = item.name,
-                                icon = item.cover,
-                                isFavorite = mainViewModel.seriesFavKey(item) in favorites,
-                                modifier = if (index == targetIndex) {
-                                    Modifier.focusRequester(gridFocusRequester)
-                                } else Modifier,
-                                onClick = { mainViewModel.openSeries(item) },
-                                onLongClick = { mainViewModel.toggleSeriesFavorite(item) },
-                                onFocusChange = { focused ->
-                                    if (focused) {
-                                        mainViewModel.seriesFocusIndex = index
-                                        mainViewModel.focusedBackdrop.value = item.cover
+                PhoneRefreshable(
+                    isRefreshing = refreshing,
+                    onRefresh = { refreshing = true; mainViewModel.refreshSeries() }
+                ) {
+                    if (series.isEmpty()) {
+                        if (contentInfo.contains("laden", ignoreCase = true)) {
+                            LazyVerticalGrid(
+                                columns = GridCells.Adaptive(minSize = 150.dp),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                verticalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                items(10) {
+                                    Box(modifier = Modifier.fillMaxWidth().aspectRatio(2f/3f).clip(RoundedCornerShape(12.dp))) {
+                                        LoadingPlaceholder()
                                     }
                                 }
+                            }
+                        } else {
+                            EmptyState(
+                                icon = Icons.Filled.Info,
+                                title = "Keine Serien",
+                                subtitle = contentInfo.ifEmpty { "In dieser Kategorie gibt es keine Treffer." }
                             )
+                        }
+                    } else {
+                        LazyVerticalGrid(
+                            state = gridState,
+                            columns = GridCells.Adaptive(minSize = 150.dp),
+                            modifier = Modifier.fillMaxSize(),
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            itemsIndexed(series, key = { _, item -> item.id }) { index, item ->
+                                PosterCard(
+                                    title = item.name,
+                                    icon = item.cover,
+                                    isFavorite = mainViewModel.seriesFavKey(item) in favorites,
+                                    modifier = if (index == targetIndex) {
+                                        Modifier.focusRequester(gridFocusRequester)
+                                    } else Modifier,
+                                    onClick = { mainViewModel.openSeries(item) },
+                                    onLongClick = { mainViewModel.toggleSeriesFavorite(item) },
+                                    onFocusChange = { focused ->
+                                        if (focused) {
+                                            mainViewModel.seriesFocusIndex = index
+                                            mainViewModel.focusedBackdrop.value = item.cover
+                                        }
+                                    }
+                                )
+                            }
                         }
                     }
                 }
