@@ -17,5 +17,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "iptv"
+rootProject.name = "ZekIPTV"
 include(":app")
