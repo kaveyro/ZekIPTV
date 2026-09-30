@@ -14,7 +14,7 @@ val keystoreProperties = Properties().apply {
 
 android {
     namespace = "com.zekikoese"
-    compileSdk = 34
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "com.zekikoese"
@@ -72,43 +72,43 @@ android {
 
 dependencies {
 
-    implementation("androidx.core:core-ktx:1.13.1")
-    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.4")
-    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.4")
-    implementation("androidx.activity:activity-compose:1.9.1")
-    implementation(platform("androidx.compose:compose-bom:2024.09.00"))
-    implementation("androidx.compose.ui:ui")
-    implementation("androidx.compose.ui:ui-graphics")
-    implementation("androidx.compose.ui:ui-tooling-preview")
-    implementation("androidx.compose.material3:material3")
+    implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.lifecycle.runtime.ktx)
+    implementation(libs.androidx.lifecycle.viewmodel.compose)
+    implementation(libs.androidx.activity.compose)
+    implementation(libs.androidx.compose.bom)
+    implementation(alias(libs.plugins.compose.ui))
+    implementation(alias(libs.plugins.androidx.compose.ui))
+    implementation(alias(libs.plugins.androidx.compose.uiX2))
+    implementation(alias(libs.plugins.compose.material3))
     // Kein material-icons-extended: der einzige genutzte Icon (Star) ist im Core-Set
     // enthalten (transitiv über material3) — spart mehrere MB.
 
     // Media3 / ExoPlayer inkl. HLS für .m3u8-Streams
-    implementation("androidx.media3:media3-exoplayer:1.3.1")
-    implementation("androidx.media3:media3-exoplayer-hls:1.3.1")
-    implementation("androidx.media3:media3-ui:1.3.1")
+    implementation(libs.androidx.media3.exoplayer)
+    implementation(libs.androidx.media3.exoplayer.hls)
+    implementation(libs.androidx.media3.ui)
 
     // Persistenz (URL, Kanäle, Favoriten)
-    implementation("androidx.datastore:datastore-preferences:1.1.1")
+    implementation(libs.androidx.datastore.preferences)
 
     // Periodischer Hintergrund-Refresh von Playlist/EPG
-    implementation("androidx.work:work-runtime-ktx:2.9.1")
+    implementation(libs.androidx.work.runtime.ktx)
 
     // Kanal-Logos
-    implementation("io.coil-kt:coil-compose:2.7.0")
+    implementation(libs.coil.compose)
 
-    testImplementation("junit:junit:4.13.2")
+    testImplementation(libs.junit)
     // XmlPullParser-Implementierung für JVM-Unit-Tests des XMLTV-Parsers
     // (auf dem Gerät liefert die Android-Plattform kXML).
-    testImplementation("net.sf.kxml:kxml2:2.3.0")
-    testImplementation("xmlpull:xmlpull:1.1.3.1")
+    testImplementation(libs.kxml2)
+    testImplementation(libs.xmlpull)
     // Echte org.json-Implementierung für JVM-Unit-Tests (android.jar enthält nur Stubs).
-    testImplementation("org.json:json:20240303")
-    androidTestImplementation("androidx.test.ext:junit:1.2.1")
-    androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
-    androidTestImplementation(platform("androidx.compose:compose-bom:2024.09.00"))
-    androidTestImplementation("androidx.compose.ui:ui-test-junit4")
-    debugImplementation("androidx.compose.ui:ui-tooling")
-    debugImplementation("androidx.compose.ui:ui-test-manifest")
+    testImplementation(libs.json)
+    androidTestImplementation(libs.androidx.junit)
+    androidTestImplementation(libs.androidx.espresso.core)
+    androidTestImplementation(libs.androidx.compose.bom)
+    androidTestImplementation(alias(libs.plugins.androidx.compose.uiX3))
+    debugImplementation(alias(libs.plugins.androidx.compose.uiX4))
+    debugImplementation(alias(libs.plugins.androidx.compose.uiX5))
 }
