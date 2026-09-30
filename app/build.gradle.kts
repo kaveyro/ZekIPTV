@@ -76,11 +76,11 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.activity.compose)
-    implementation(libs.androidx.compose.bom)
-    implementation(alias(libs.plugins.compose.ui))
-    implementation(alias(libs.plugins.androidx.compose.ui))
-    implementation(alias(libs.plugins.androidx.compose.uiX2))
-    implementation(alias(libs.plugins.compose.material3))
+    implementation(platform(libs.androidx.compose.bom))
+    implementation(libs.androidx.compose.ui)
+    implementation(libs.androidx.compose.ui.graphics)
+    implementation(libs.androidx.compose.ui.tooling.preview)
+    implementation(libs.androidx.compose.material3)
     // Kein material-icons-extended: der einzige genutzte Icon (Star) ist im Core-Set
     // enthalten (transitiv über material3) — spart mehrere MB.
 
@@ -107,8 +107,8 @@ dependencies {
     testImplementation(libs.json)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
-    androidTestImplementation(libs.androidx.compose.bom)
-    androidTestImplementation(alias(libs.plugins.androidx.compose.uiX3))
-    debugImplementation(alias(libs.plugins.androidx.compose.uiX4))
-    debugImplementation(alias(libs.plugins.androidx.compose.uiX5))
+    androidTestImplementation(platform(libs.androidx.compose.bom))
+    androidTestImplementation(libs.androidx.compose.ui.test.junit4)
+    debugImplementation(libs.androidx.compose.ui.tooling)
+    debugImplementation(libs.androidx.compose.ui.test.manifest)
 }
