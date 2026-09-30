@@ -22,7 +22,7 @@ import java.io.File
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "iptv_prefs")
 
 // Prozessweit: ViewModel und RefreshWorker nutzen eigene Repository-Instanzen.
-private val channelsFileLock = Mutex()
+private val channelsLock = Mutex()
 
 /** Eine gespeicherte Playlist (Name + M3U-URL) im Playlist-Manager. */
 data class PlaylistEntry(val name: String, val url: String)
@@ -58,7 +58,15 @@ class PlaylistRepository(private val context: Context) {
         val SEARCH_HISTORY = stringPreferencesKey("search_history_json") // ["query", ...] neueste zuerst
         val UI_MODE = stringPreferencesKey("ui_mode") // auto | tv | phone
         val RESIZE_MODE = stringPreferencesKey("resize_mode") // fit | zoom | fill
+        val AUTO_FRAME_RATE = stringPreferencesKey("auto_frame_rate") // "true"/"false" (nur TV)
+        val TIMESHIFT = stringPreferencesKey("timeshift") // "true"/"false"
+        val LAST_UPDATE_CHECK = stringPreferencesKey("last_update_check") // ms
+        val DISMISSED_UPDATE = stringPreferencesKey("dismissed_update") // Version, deren Hinweis weggeklickt wurde
         val PARENTAL_PIN = stringPreferencesKey("parental_pin") // leer/fehlend = kein Jugendschutz
+        // M3U-Playlist-URL -> aus den Streams erkannter Xtream-Zugang {base, user, pass}
+        val XTREAM_LINKS = stringPreferencesKey("xtream_links_json")
+        // Playlists, für die der Nutzer die Xtream-Erkennung abgelehnt hat
+        val XTREAM_DISMISSED = stringSetPreferencesKey("xtream_dismissed")
     }
 
     private companion object {
@@ -106,48 +114,71 @@ class PlaylistRepository(private val context: Context) {
 
     val resizeModeFlow: Flow<String> = context.dataStore.data.map { it[Keys.RESIZE_MODE] ?: "fit" }
 
+    val autoFrameRateFlow: Flow<Boolean> = context.dataStore.data.map { it[Keys.AUTO_FRAME_RATE] == "true" }
+
+    val timeshiftFlow: Flow<Boolean> = context.dataStore.data.map { it[Keys.TIMESHIFT] == "true" }
+
+    val lastUpdateCheckFlow: Flow<Long> = context.dataStore.data.map { it[Keys.LAST_UPDATE_CHECK]?.toLongOrNull() ?: 0L }
+
+    val dismissedUpdateFlow: Flow<String> = context.dataStore.data.map { it[Keys.DISMISSED_UPDATE] ?: "" }
+
+    suspend fun saveLastUpdateCheck(timeMs: Long) {
+        context.dataStore.edit { it[Keys.LAST_UPDATE_CHECK] = timeMs.toString() }
+    }
+
+    suspend fun saveDismissedUpdate(version: String) {
+        context.dataStore.edit { it[Keys.DISMISSED_UPDATE] = version }
+    }
+
     val parentalPinFlow: Flow<String> = context.dataStore.data.map { it[Keys.PARENTAL_PIN] ?: "" }
+
+    val xtreamLinksFlow: Flow<Map<String, XtreamAccount>> = context.dataStore.data.map { prefs ->
+        prefs[Keys.XTREAM_LINKS]?.let(::decodeXtreamLinks) ?: emptyMap()
+    }
+
+    val xtreamDismissedFlow: Flow<Set<String>> =
+        context.dataStore.data.map { it[Keys.XTREAM_DISMISSED] ?: emptySet() }
 
     suspend fun saveUrl(url: String) {
         context.dataStore.edit { it[Keys.URL] = url }
     }
 
-    // ---------- Kanäle (eigene Datei statt DataStore) ----------
-    // DataStore schreibt bei jeder Änderung die komplette Preferences-Datei neu. Mit einer
-    // großen Playlist darin würde jeder Favoriten-Toggle / jede Resume-Sicherung mehrere MB
-    // schreiben — deshalb liegen die Kanäle separat.
+    // ---------- Kanäle (SQLite, siehe AppDatabase) ----------
+    // Nicht in DataStore: dort würde jeder Favoriten-Toggle / jede Resume-Sicherung die komplette
+    // Liste neu schreiben. Frühere Versionen nutzten channels.json bzw. einen DataStore-Eintrag —
+    // beides wird beim ersten Laden übernommen und entfernt.
 
-    private val channelsFile: File get() = File(context.filesDir, "channels.json")
+    private val database: AppDatabase get() = AppDatabase.get(context)
+    private val legacyChannelsFile: File get() = File(context.filesDir, "channels.json")
 
     suspend fun saveChannels(channels: List<Channel>) {
         withContext(Dispatchers.IO) {
-            val json = encodeChannels(channels)
-            channelsFileLock.withLock {
-                // Atomar ersetzen: erst temporär schreiben, dann umbenennen.
-                val tmp = File(context.filesDir, "channels.json.tmp")
-                tmp.writeText(json)
-                if (!tmp.renameTo(channelsFile)) {
-                    channelsFile.delete()
-                    tmp.renameTo(channelsFile)
-                }
-            }
+            channelsLock.withLock { database.replaceChannels(channels) }
         }
     }
 
-    /** Lädt die gespeicherten Kanäle; übernimmt einmalig den alten DataStore-Eintrag. */
+    /** Lädt die gespeicherten Kanäle; übernimmt einmalig ältere Speicherformate. */
     suspend fun loadChannels(): List<Channel> = withContext(Dispatchers.IO) {
-        val legacy = context.dataStore.data.first()[Keys.LEGACY_CHANNELS]
-        val fromFile = channelsFileLock.withLock {
-            if (channelsFile.exists()) {
-                runCatching { decodeChannels(channelsFile.readText()) }.getOrNull()
-            } else null
+        channelsLock.withLock {
+            if (database.hasChannels()) {
+                cleanUpLegacyChannels()
+                return@withContext database.readChannels()
+            }
+            val migrated = legacyChannelsFile.takeIf { it.exists() }
+                ?.let { runCatching { decodeChannels(it.readText()) }.getOrNull() }
+                ?: context.dataStore.data.first()[Keys.LEGACY_CHANNELS]?.let(::decodeChannels)
+                ?: emptyList()
+            if (migrated.isNotEmpty()) database.replaceChannels(migrated)
+            cleanUpLegacyChannels()
+            migrated
         }
-        val channels = fromFile
-            ?: legacy?.let(::decodeChannels)?.also { if (it.isNotEmpty()) saveChannels(it) }
-            ?: emptyList()
-        // Alten Eintrag entfernen, damit DataStore-Schreibvorgänge wieder klein sind.
-        if (legacy != null) context.dataStore.edit { it.remove(Keys.LEGACY_CHANNELS) }
-        channels
+    }
+
+    private suspend fun cleanUpLegacyChannels() {
+        if (legacyChannelsFile.exists()) legacyChannelsFile.delete()
+        if (context.dataStore.data.first()[Keys.LEGACY_CHANNELS] != null) {
+            context.dataStore.edit { it.remove(Keys.LEGACY_CHANNELS) }
+        }
     }
 
     suspend fun toggleFavorite(url: String) {
@@ -179,6 +210,49 @@ class PlaylistRepository(private val context: Context) {
 
     suspend fun saveResizeMode(mode: String) {
         context.dataStore.edit { it[Keys.RESIZE_MODE] = mode }
+    }
+
+    suspend fun saveAutoFrameRate(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.AUTO_FRAME_RATE] = enabled.toString() }
+    }
+
+    suspend fun saveTimeshift(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.TIMESHIFT] = enabled.toString() }
+    }
+
+    /** Verknüpft (oder mit null: löst) einen erkannten Xtream-Zugang mit einer M3U-Playlist. */
+    suspend fun saveXtreamLink(playlistUrl: String, account: XtreamAccount?) {
+        context.dataStore.edit { prefs ->
+            val current = prefs[Keys.XTREAM_LINKS]?.let(::decodeXtreamLinks) ?: emptyMap()
+            val updated = if (account != null) current + (playlistUrl to account) else current - playlistUrl
+            prefs[Keys.XTREAM_LINKS] = encodeXtreamLinks(updated)
+        }
+    }
+
+    suspend fun dismissXtream(playlistUrl: String) {
+        context.dataStore.edit { prefs ->
+            prefs[Keys.XTREAM_DISMISSED] = (prefs[Keys.XTREAM_DISMISSED] ?: emptySet()) + playlistUrl
+        }
+    }
+
+    private fun encodeXtreamLinks(links: Map<String, XtreamAccount>): String {
+        val root = JSONObject()
+        links.forEach { (url, a) ->
+            root.put(url, JSONObject().put("base", a.baseUrl).put("user", a.username).put("pass", a.password))
+        }
+        return root.toString()
+    }
+
+    private fun decodeXtreamLinks(json: String): Map<String, XtreamAccount> = try {
+        val root = JSONObject(json)
+        buildMap {
+            root.keys().forEach { url ->
+                val o = root.getJSONObject(url)
+                put(url, XtreamAccount(o.getString("base"), o.getString("user"), o.getString("pass")))
+            }
+        }
+    } catch (e: Exception) {
+        emptyMap()
     }
 
     suspend fun saveParentalPin(pin: String?) {
@@ -254,61 +328,26 @@ class PlaylistRepository(private val context: Context) {
         }
     }
 
-    // ---------- EPG-Cache (Datei, damit kein Download bei jedem Start nötig ist) ----------
-
-    private val epgCacheFile: File get() = File(context.filesDir, "epg_cache.json")
+    // ---------- EPG-Cache (SQLite, damit kein Download bei jedem Start nötig ist) ----------
 
     suspend fun saveEpgCache(
         programmes: Map<String, List<EpgProgramme>>,
         nameToId: Map<String, String>
     ) = withContext(Dispatchers.IO) {
-        runCatching {
-            val root = JSONObject()
-            root.put("ts", System.currentTimeMillis())
-            root.put("nameToId", JSONObject(nameToId as Map<*, *>))
-            val progs = JSONObject()
-            programmes.forEach { (id, list) ->
-                val array = JSONArray()
-                list.forEach { p ->
-                    array.put(JSONArray().put(p.startMs).put(p.stopMs).put(p.title))
-                }
-                progs.put(id, array)
-            }
-            root.put("programmes", progs)
-            epgCacheFile.writeText(root.toString())
-        }
+        runCatching { database.replaceEpg(programmes, nameToId) }
     }
 
     suspend fun clearEpgCache() = withContext(Dispatchers.IO) {
-        if (epgCacheFile.exists()) epgCacheFile.delete()
+        runCatching { database.clearEpg() }
     }
 
     /** Lädt den EPG-Cache, falls vorhanden und jünger als [maxAgeMs]; sonst null. */
     suspend fun loadEpgCache(
         maxAgeMs: Long
     ): Pair<Map<String, List<EpgProgramme>>, Map<String, String>>? = withContext(Dispatchers.IO) {
-        runCatching {
-            if (!epgCacheFile.exists()) return@runCatching null
-            val root = JSONObject(epgCacheFile.readText())
-            if (System.currentTimeMillis() - root.optLong("ts") > maxAgeMs) return@runCatching null
-            val nameToId = buildMap {
-                val obj = root.optJSONObject("nameToId") ?: JSONObject()
-                obj.keys().forEach { put(it, obj.getString(it)) }
-            }
-            val programmes = buildMap<String, List<EpgProgramme>> {
-                val obj = root.optJSONObject("programmes") ?: JSONObject()
-                obj.keys().forEach { id ->
-                    val array = obj.getJSONArray(id)
-                    put(id, buildList {
-                        for (i in 0 until array.length()) {
-                            val p = array.getJSONArray(i)
-                            add(EpgProgramme(id, p.getLong(0), p.getLong(1), p.getString(2)))
-                        }
-                    })
-                }
-            }
-            programmes to nameToId
-        }.getOrNull()
+        // Alter JSON-Cache früherer Versionen: nicht migrieren (ist ohnehin nach 12 h veraltet).
+        File(context.filesDir, "epg_cache.json").takeIf { it.exists() }?.delete()
+        runCatching { database.readEpg(maxAgeMs) }.getOrNull()
     }
 
     private fun decodeResume(json: String): Map<String, Long> = try {
@@ -382,6 +421,10 @@ class PlaylistRepository(private val context: Context) {
             put("hiddenGroups", JSONArray((prefs[Keys.HIDDEN_GROUPS] ?: emptySet()).toList()))
             put("uiMode", prefs[Keys.UI_MODE] ?: "auto")
             put("resizeMode", prefs[Keys.RESIZE_MODE] ?: "fit")
+            put("autoFrameRate", prefs[Keys.AUTO_FRAME_RATE] ?: "false")
+            put("timeshift", prefs[Keys.TIMESHIFT] ?: "false")
+            put("xtreamLinks", prefs[Keys.XTREAM_LINKS] ?: "{}")
+            put("xtreamDismissed", JSONArray((prefs[Keys.XTREAM_DISMISSED] ?: emptySet()).toList()))
         }
         val json = root.toString(2)
         if (target != null) {
@@ -421,6 +464,10 @@ class PlaylistRepository(private val context: Context) {
             prefs[Keys.HIDDEN_GROUPS] = jsonToSet("hiddenGroups")
             prefs[Keys.UI_MODE] = root.optString("uiMode", "auto")
             prefs[Keys.RESIZE_MODE] = root.optString("resizeMode", "fit")
+            prefs[Keys.AUTO_FRAME_RATE] = root.optString("autoFrameRate", "false")
+            prefs[Keys.TIMESHIFT] = root.optString("timeshift", "false")
+            prefs[Keys.XTREAM_LINKS] = root.optString("xtreamLinks", "{}")
+            prefs[Keys.XTREAM_DISMISSED] = jsonToSet("xtreamDismissed")
         }
         source?.lastPathSegment ?: backupFile.absolutePath
     }
@@ -446,24 +493,6 @@ class PlaylistRepository(private val context: Context) {
         }
     } catch (e: Exception) {
         emptyList()
-    }
-
-    private fun encodeChannels(channels: List<Channel>): String {
-        val array = JSONArray()
-        channels.forEach { c ->
-            array.put(
-                JSONObject().apply {
-                    put("name", c.name)
-                    put("url", c.url)
-                    put("logo", c.logo ?: JSONObject.NULL)
-                    put("group", c.group ?: JSONObject.NULL)
-                    put("tvgId", c.tvgId ?: JSONObject.NULL)
-                    c.userAgent?.let { put("ua", it) }
-                    c.referrer?.let { put("ref", it) }
-                }
-            )
-        }
-        return array.toString()
     }
 
     private fun decodeChannels(json: String): List<Channel> = try {

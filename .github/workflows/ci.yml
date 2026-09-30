@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Unit-Tests, Lint und Debug-Build
+        run: ./gradlew --no-daemon testDebugUnitTest lintRelease assembleDebug
+
+      - name: Berichte bei Fehlern hochladen
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reports
+          path: |
+            app/build/reports/
+            app/build/test-results/
+
+      - name: Debug-APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: ZekIPTV-debug
+          path: app/build/outputs/apk/debug/*.apk

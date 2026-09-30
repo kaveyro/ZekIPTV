@@ -1,7 +1,10 @@
 package com.zekikoese
 
 import android.app.Application
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
+import androidx.core.content.ContextCompat
 import androidx.compose.runtime.State
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -13,6 +16,14 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+/** Aus den Stream-URLs einer M3U erkannter und beim Anbieter bestätigter Xtream-Zugang. */
+data class XtreamSuggestion(
+    val playlistUrl: String,
+    val account: XtreamAccount,
+    val info: XtreamAccountInfo,
+    val output: String
+)
 
 sealed interface PlaylistUiState {
     data object Idle : PlaylistUiState
@@ -62,15 +73,38 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val epgInfo = mutableStateOf("")
     val autoplayLast = mutableStateOf(false)
     val resizeMode = mutableStateOf("fit") // fit | zoom | fill (Bildformat im Player)
+    val autoFrameRate = mutableStateOf(false) // TV: Bildwiederholrate an das Video anpassen
+    val timeshift = mutableStateOf(false) // Live-TV pausieren/zurückspulen (lokale Aufnahme)
 
     // Jugendschutz: PIN schützt ausgeblendete Kategorien und den Backup-Import.
     val parentalPin = mutableStateOf("")
     val parentalUnlocked = mutableStateOf(false) // gilt bis zum App-Neustart
     val parentalLocked: Boolean get() = parentalPin.value.isNotEmpty() && !parentalUnlocked.value
 
-    // Xtream (Filme/Serien) — verfügbar, wenn die Playlist-URL eine get.php-URL ist.
+    // Xtream (Filme/Serien) — verfügbar, wenn die Playlist-URL eine get.php-URL ist oder ein
+    // aus den Streams erkannter Zugang mit der M3U verknüpft wurde.
     val xtreamAvailable = mutableStateOf(false)
     private var xtream: XtreamApi? = null
+    val xtreamAccount = mutableStateOf<XtreamAccount?>(null)
+    val xtreamLinked = mutableStateOf(false) // true = verknüpft (M3U bleibt), false = get.php
+    private val xtreamLinks = mutableStateOf<Map<String, XtreamAccount>>(emptyMap())
+    private val xtreamDismissed = mutableStateOf<Set<String>>(emptySet())
+    val xtreamSuggestion = mutableStateOf<XtreamSuggestion?>(null)
+    val xtreamSuggestionDialog = mutableStateOf(false) // Hinweis-Dialog einmal pro Erkennung
+    private var suggestionJob: Job? = null
+
+    // Android 17+: Zugriff auf Geräte im Heimnetz (lokale Playlists/Streams) braucht eine
+    // Laufzeit-Berechtigung. MainActivity fragt sie an, sobald dieser State true wird.
+    val localNetworkPermissionRequest = mutableStateOf(false)
+    val localNetworkDenied = mutableStateOf(false)
+
+    // App-Updates aus GitHub-Releases (Sideload-App ohne Play Store).
+    val availableUpdate = mutableStateOf<AppRelease?>(null)
+    val updateDialog = mutableStateOf(false)
+    val updateStatus = mutableStateOf("")
+    val updateInProgress = mutableStateOf(false)
+    private var updateJob: Job? = null
+    private var afterLocalNetworkPermission: (() -> Unit)? = null
     val vodItems = mutableStateOf<List<VodItem>>(emptyList())
     val vodCategories = mutableStateOf<Map<String, String>>(emptyMap())
     val selectedVodCategory = mutableStateOf<String?>(null)
@@ -315,6 +349,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             themeMode.value = repository.themeFlow.first()
             uiModeOverride.value = repository.uiModeFlow.first()
             resizeMode.value = repository.resizeModeFlow.first()
+            autoFrameRate.value = repository.autoFrameRateFlow.first()
+            timeshift.value = repository.timeshiftFlow.first()
             parentalPin.value = repository.parentalPinFlow.first()
             epgSources.value = repository.epgSourcesFlow.first()
             autoplayLast.value = repository.autoplayFlow.first()
@@ -327,6 +363,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 repository.savePlaylists(storedPlaylists)
             }
             playlists.value = storedPlaylists
+            xtreamLinks.value = repository.xtreamLinksFlow.first()
+            xtreamDismissed.value = repository.xtreamDismissedFlow.first()
 
             setupXtream(url.value, autoAddEpg = false)
 
@@ -335,6 +373,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 allChannels.value = saved
                 uiState.value = PlaylistUiState.Success
                 pendingListFocus.value = true
+                checkXtreamSuggestion(url.value, saved)
+                requestLocalNetworkIfNeeded(streamSample(saved) + epgSources.value)
             }
 
             // EPG: erst aus dem Datei-Cache, nur bei veraltetem/fehlendem Cache neu laden.
@@ -378,6 +418,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
         viewModelScope.launch {
             repository.searchHistoryFlow.collect { searchHistory.value = it }
+        }
+        // Update-Prüfung höchstens einmal am Tag automatisch.
+        viewModelScope.launch {
+            if (System.currentTimeMillis() - repository.lastUpdateCheckFlow.first() > UPDATE_CHECK_INTERVAL_MS) {
+                checkForUpdates(manual = false)
+            }
         }
         // Minuten-Ticker für "Jetzt läuft"/Fortschrittsbalken.
         viewModelScope.launch {
@@ -460,6 +506,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { repository.saveParentalPin(trimmed) }
     }
 
+    fun setTimeshift(enabled: Boolean) {
+        timeshift.value = enabled
+        viewModelScope.launch { repository.saveTimeshift(enabled) }
+    }
+
+    fun setAutoFrameRate(enabled: Boolean) {
+        autoFrameRate.value = enabled
+        viewModelScope.launch { repository.saveAutoFrameRate(enabled) }
+    }
+
     /** Bildformat durchschalten: Anpassen -> Zoom -> Strecken -> Anpassen. */
     fun cycleResizeMode() {
         val next = when (resizeMode.value) {
@@ -496,8 +552,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun setupXtream(playlistUrl: String, autoAddEpg: Boolean) {
-        val account = detectXtream(playlistUrl)
+        val native = detectXtream(playlistUrl)
+        val account = native ?: xtreamLinks.value[playlistUrl]
         xtream = account?.let { XtreamApi(it) }
+        xtreamAccount.value = account
+        xtreamLinked.value = native == null && account != null
         xtreamAvailable.value = xtream != null
         accountInfo.value = null
         archiveDays.value = emptyMap()
@@ -513,6 +572,197 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         if (autoAddEpg) {
             // Ohne eigenen Refresh: der Aufrufer (loadPlaylist) lädt das EPG direkt danach.
             xtream?.epgUrl()?.let { epg -> if (epg !in epgSources.value) addEpgSource(epg, refresh = false) }
+        }
+    }
+
+    // ---------- M3U -> Xtream ----------
+
+    /**
+     * Prüft, ob die Streams einer normalen M3U-Playlist von einem Xtream-Server stammen, und
+     * bestätigt den Zugang beim Anbieter. Nur dann wird die Umwandlung angeboten.
+     */
+    private fun checkXtreamSuggestion(playlistUrl: String, channels: List<Channel>, showDialog: Boolean = true) {
+        suggestionJob?.cancel()
+        xtreamSuggestion.value = null
+        if (detectXtream(playlistUrl) != null || playlistUrl in xtreamLinks.value ||
+            playlistUrl in xtreamDismissed.value
+        ) return
+        val candidate = detectXtreamFromChannels(channels) ?: return
+        suggestionJob = viewModelScope.launch {
+            val info = runCatching {
+                withContext(Dispatchers.IO) { XtreamApi(candidate).getAccountInfo() }
+            }.getOrNull() ?: return@launch // kein Xtream-Server oder offline — nichts anbieten
+            if (!info.authenticated) return@launch
+            xtreamSuggestion.value = XtreamSuggestion(playlistUrl, candidate, info, preferredXtreamOutput(channels))
+            xtreamSuggestionDialog.value = showDialog
+        }
+    }
+
+    /** Erkannten Zugang mit der M3U verknüpfen: Senderliste bleibt, Filme/Serien/Catch-up kommen dazu. */
+    fun linkXtreamSuggestion() {
+        val suggestion = xtreamSuggestion.value ?: return
+        xtreamSuggestion.value = null
+        xtreamSuggestionDialog.value = false
+        xtreamLinks.value = xtreamLinks.value + (suggestion.playlistUrl to suggestion.account)
+        viewModelScope.launch { repository.saveXtreamLink(suggestion.playlistUrl, suggestion.account) }
+        if (url.value == suggestion.playlistUrl) {
+            setupXtream(suggestion.playlistUrl, autoAddEpg = true)
+            refreshEpg()
+        }
+    }
+
+    /** Playlist komplett auf die get.php-URL des Anbieters umstellen (volle Senderliste + EPG). */
+    fun convertXtreamSuggestion() {
+        val suggestion = xtreamSuggestion.value ?: return
+        xtreamSuggestion.value = null
+        xtreamSuggestionDialog.value = false
+        val newUrl = xtreamPlaylistUrl(suggestion.account, suggestion.output)
+        val old = playlists.value.firstOrNull { it.url == suggestion.playlistUrl }
+        val entry = PlaylistEntry(old?.name ?: "Xtream", newUrl)
+        val updated = playlists.value.map { if (it.url == suggestion.playlistUrl) entry else it }
+            .let { if (old == null) it + entry else it }
+            .distinctBy { it.url }
+        playlists.value = updated
+        viewModelScope.launch { repository.savePlaylists(updated) }
+        selectPlaylist(entry)
+    }
+
+    /** Hinweis ablehnen — für diese Playlist nicht erneut anbieten. */
+    fun dismissXtreamSuggestion() {
+        val suggestion = xtreamSuggestion.value ?: return
+        xtreamSuggestion.value = null
+        xtreamSuggestionDialog.value = false
+        xtreamDismissed.value = xtreamDismissed.value + suggestion.playlistUrl
+        viewModelScope.launch { repository.dismissXtream(suggestion.playlistUrl) }
+    }
+
+    /** Verknüpfung eines erkannten Zugangs wieder lösen (Einstellungen). */
+    fun unlinkXtream() {
+        val playlistUrl = url.value
+        if (playlistUrl !in xtreamLinks.value) return
+        xtreamLinks.value = xtreamLinks.value - playlistUrl
+        viewModelScope.launch { repository.saveXtreamLink(playlistUrl, null) }
+        vodItems.value = emptyList()
+        seriesItems.value = emptyList()
+        setupXtream(playlistUrl, autoAddEpg = false)
+        // Umwandlung wieder anbieten (in den Einstellungen, ohne Dialog).
+        checkXtreamSuggestion(playlistUrl, allChannels.value, showDialog = false)
+    }
+
+    /** Neue Playlist aus Xtream-Zugangsdaten (Server, Benutzer, Passwort). */
+    fun addXtreamLogin(name: String, server: String, username: String, password: String) {
+        if (server.isBlank() || username.isBlank() || password.isBlank()) return
+        val account = XtreamAccount(normalizeXtreamServer(server), username.trim(), password.trim())
+        addPlaylist(name.ifBlank { "Xtream" }, xtreamPlaylistUrl(account))
+    }
+
+    // ---------- App-Update ----------
+
+    /** Sucht nach einer neueren Version; [manual] = vom Nutzer ausgelöst (dann immer Rückmeldung). */
+    fun checkForUpdates(manual: Boolean) {
+        if (updateJob?.isActive == true) return
+        if (manual) updateStatus.value = "Suche nach Updates…"
+        updateJob = viewModelScope.launch {
+            val result = runCatching { withContext(Dispatchers.IO) { UpdateChecker.fetchLatest() } }
+            repository.saveLastUpdateCheck(System.currentTimeMillis())
+            val release = result.getOrNull()
+            when {
+                result.isFailure -> if (manual) updateStatus.value = "Update-Prüfung fehlgeschlagen: ${result.exceptionOrNull()?.message}"
+                release != null && UpdateChecker.isNewer(release.version, BuildConfig.VERSION_NAME) -> {
+                    availableUpdate.value = release
+                    updateStatus.value = ""
+                    // Automatischer Hinweis nur einmal pro Version.
+                    if (manual || repository.dismissedUpdateFlow.first() != release.version) updateDialog.value = true
+                }
+                else -> {
+                    availableUpdate.value = null
+                    if (manual) updateStatus.value = "ZekIPTV ist auf dem neuesten Stand (${BuildConfig.VERSION_NAME})."
+                }
+            }
+        }
+    }
+
+    fun dismissUpdateDialog() {
+        updateDialog.value = false
+        val version = availableUpdate.value?.version ?: return
+        viewModelScope.launch { repository.saveDismissedUpdate(version) }
+    }
+
+    /** Lädt das Update und übergibt es an den System-Installer. */
+    fun installUpdate() {
+        val release = availableUpdate.value ?: return
+        val context = getApplication<Application>()
+        updateDialog.value = false
+        if (!UpdateChecker.canInstall(context)) {
+            updateStatus.value = "Bitte „Unbekannte Apps installieren“ für ZekIPTV erlauben und erneut tippen."
+            runCatching { UpdateChecker.openInstallPermissionSettings(context) }
+            return
+        }
+        if (updateInProgress.value) return
+        updateInProgress.value = true
+        updateStatus.value = "Update wird geladen…"
+        viewModelScope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    UpdateChecker.download(context, release) { progress ->
+                        updateStatus.value = "Update wird geladen… ${(progress * 100).toInt()} %"
+                    }
+                }
+            }.fold(
+                onSuccess = { apk ->
+                    updateStatus.value = "Installation wird gestartet…"
+                    runCatching { UpdateChecker.install(context, apk) }
+                        .onFailure { updateStatus.value = "Installation fehlgeschlagen: ${it.message}" }
+                },
+                onFailure = { updateStatus.value = "Download fehlgeschlagen: ${it.message}" }
+            )
+            updateInProgress.value = false
+        }
+    }
+
+    // ---------- Heimnetz-Berechtigung (Android 17+) ----------
+
+    /** Einige Stream-URLs der Playlist (je Host eine) für die Heimnetz-Prüfung. */
+    private fun streamSample(channels: List<Channel>): List<String> =
+        channels.asSequence().map { it.url }.distinctBy { it.substringAfter("://").substringBefore('/') }
+            .take(10).toList()
+
+    private fun needsLocalNetworkPermission(): Boolean =
+        Build.VERSION.SDK_INT >= 37 &&
+            ContextCompat.checkSelfPermission(getApplication(), LOCAL_NETWORK_PERMISSION) !=
+            PackageManager.PERMISSION_GRANTED
+
+    /**
+     * Führt [action] aus — zeigt eine der [urls] ins Heimnetz und fehlt die Berechtigung, wird
+     * sie vorher angefragt ([action] läuft dann nach der Zustimmung).
+     */
+    private fun requestLocalNetworkIfNeeded(urls: Collection<String>, action: (() -> Unit)? = null) {
+        if (!needsLocalNetworkPermission()) {
+            action?.invoke()
+            return
+        }
+        viewModelScope.launch {
+            val local = withContext(Dispatchers.IO) { urls.any(Http::isLocalNetworkUrl) }
+            if (local) {
+                afterLocalNetworkPermission = action
+                localNetworkPermissionRequest.value = true
+            } else {
+                action?.invoke()
+            }
+        }
+    }
+
+    fun onLocalNetworkPermissionResult(granted: Boolean) {
+        localNetworkPermissionRequest.value = false
+        val action = afterLocalNetworkPermission
+        afterLocalNetworkPermission = null
+        localNetworkDenied.value = !granted
+        if (granted) {
+            action?.invoke()
+        } else if (action != null) {
+            uiState.value = PlaylistUiState.Error(
+                "Kein Zugriff aufs Heimnetz: Bitte die Berechtigung „Geräte in der Nähe“ für ZekIPTV erlauben."
+            )
         }
     }
 
@@ -867,6 +1117,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         uiState.value = PlaylistUiState.Loading
+        // Lokale Playlist (Tvheadend, NAS …): ab Android 17 erst nach Heimnetz-Berechtigung laden.
+        requestLocalNetworkIfNeeded(listOf(target)) { fetchPlaylist(target) }
+    }
+
+    private fun fetchPlaylist(target: String) {
         viewModelScope.launch {
             val result = withContext(Dispatchers.IO) {
                 runCatching {
@@ -897,6 +1152,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         repository.saveUrl(target)
                         repository.saveChannels(channels)
                         refreshEpg()
+                        checkXtreamSuggestion(target, channels)
+                        // Streams/EPG im Heimnetz (Playlist selbst evtl. aus dem Internet).
+                        requestLocalNetworkIfNeeded(streamSample(channels) + epgSources.value)
                     }
                 },
                 onFailure = { e ->
@@ -1005,9 +1263,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     themeMode.value = repository.themeFlow.first()
                     uiModeOverride.value = repository.uiModeFlow.first()
                     resizeMode.value = repository.resizeModeFlow.first()
+                    autoFrameRate.value = repository.autoFrameRateFlow.first()
+                    timeshift.value = repository.timeshiftFlow.first()
                     epgSources.value = repository.epgSourcesFlow.first()
                     autoplayLast.value = repository.autoplayFlow.first()
                     playlists.value = repository.playlistsFlow.first()
+                    xtreamLinks.value = repository.xtreamLinksFlow.first()
+                    xtreamDismissed.value = repository.xtreamDismissedFlow.first()
                     backupInfo.value = "Backup importiert — Playlist wird geladen…"
                     if (url.value.isNotBlank()) loadPlaylist()
                 },
@@ -1017,6 +1279,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     companion object {
+        const val LOCAL_NETWORK_PERMISSION = "android.permission.ACCESS_LOCAL_NETWORK"
+        private const val UPDATE_CHECK_INTERVAL_MS = 24L * 60 * 60 * 1000
         const val FAVORITES_GROUP = "★ Favoriten"
         const val FAV_CATEGORY = "__favoriten__" // Pseudo-Kategorie für Filme/Serien
         private const val EPG_CACHE_MAX_AGE_MS = 12L * 60 * 60 * 1000 // 12 h

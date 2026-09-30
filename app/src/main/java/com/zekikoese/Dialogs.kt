@@ -45,12 +45,12 @@ import java.util.Locale
 /** Fokussierbare Dialog-Zeile mit sichtbarem D-Pad-Fokus. */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-internal fun DialogRow(label: String, highlighted: Boolean = false, onClick: () -> Unit) {
+internal fun DialogRow(label: String, highlighted: Boolean = false, maxLines: Int = 1, onClick: () -> Unit) {
     Text(
         text = label,
         color = if (highlighted) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
         fontWeight = if (highlighted) FontWeight.Bold else FontWeight.Normal,
-        maxLines = 1,
+        maxLines = maxLines,
         overflow = TextOverflow.Ellipsis,
         style = MaterialTheme.typography.titleMedium,
         modifier = Modifier
@@ -65,14 +65,22 @@ internal fun DialogRow(label: String, highlighted: Boolean = false, onClick: () 
     )
 }
 
-/** Dialog zum Hinzufügen/Bearbeiten einer Playlist (Name + URL). */
+/**
+ * Dialog zum Hinzufügen einer Playlist: entweder als M3U-URL oder per Xtream-Login
+ * (Server, Benutzer, Passwort — daraus wird die get.php-URL gebaut).
+ */
 @Composable
 fun PlaylistInputDialog(
     onConfirm: (name: String, url: String) -> Unit,
+    onConfirmXtream: (name: String, server: String, username: String, password: String) -> Unit,
     onDismiss: () -> Unit
 ) {
     var name by remember { mutableStateOf("") }
     var url by remember { mutableStateOf("") }
+    var xtreamMode by remember { mutableStateOf(false) }
+    var server by remember { mutableStateOf("") }
+    var username by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
     val focusRequester = remember { FocusRequester() }
     val isTv = LocalIsTv.current
     val widthModifier = if (isTv) Modifier.width(500.dp) else Modifier.fillMaxWidth()
@@ -88,8 +96,13 @@ fun PlaylistInputDialog(
                 Text(
                     text = "Playlist hinzufügen",
                     style = MaterialTheme.typography.titleLarge,
-                    modifier = Modifier.padding(bottom = 16.dp)
+                    modifier = Modifier.padding(bottom = 12.dp)
                 )
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    GroupChip("M3U-URL", selected = !xtreamMode) { xtreamMode = false }
+                    GroupChip("Xtream-Login", selected = xtreamMode) { xtreamMode = true }
+                }
+                Spacer(Modifier.height(12.dp))
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
@@ -98,13 +111,43 @@ fun PlaylistInputDialog(
                     modifier = Modifier.fillMaxWidth().focusRequester(focusRequester)
                 )
                 Spacer(Modifier.height(12.dp))
-                OutlinedTextField(
-                    value = url,
-                    onValueChange = { url = it },
-                    label = { Text("M3U-URL") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
+                if (xtreamMode) {
+                    OutlinedTextField(
+                        value = server,
+                        onValueChange = { server = it },
+                        label = { Text("Server (z. B. http://anbieter.tv:8080)") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    OutlinedTextField(
+                        value = username,
+                        onValueChange = { username = it },
+                        label = { Text("Benutzername") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    OutlinedTextField(
+                        value = password,
+                        onValueChange = { password = it },
+                        label = { Text("Passwort") },
+                        singleLine = true,
+                        visualTransformation = PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                } else {
+                    OutlinedTextField(
+                        value = url,
+                        onValueChange = { url = it },
+                        label = { Text("M3U-URL") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
                 Spacer(Modifier.height(24.dp))
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                     TvButton(
@@ -117,9 +160,80 @@ fun PlaylistInputDialog(
                     )
                     TvButton(
                         text = "Hinzufügen",
-                        onClick = { onConfirm(name, url); onDismiss() }
+                        onClick = {
+                            if (xtreamMode) onConfirmXtream(name, server, username, password)
+                            else onConfirm(name, url)
+                            onDismiss()
+                        }
                     )
                 }
+            }
+        }
+    }
+}
+
+/** Hinweis auf eine neuere App-Version (GitHub-Release). */
+@Composable
+fun UpdateDialog(release: AppRelease, onInstall: () -> Unit, onLater: () -> Unit) {
+    val widthModifier = if (LocalIsTv.current) Modifier.width(620.dp) else Modifier.fillMaxWidth()
+    Dialog(onDismissRequest = onLater) {
+        Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surface) {
+            Column(modifier = Modifier.padding(24.dp).then(widthModifier)) {
+                Text(
+                    text = "Update verfügbar: ${release.version}",
+                    style = MaterialTheme.typography.titleLarge,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+                if (release.notes.isNotBlank()) {
+                    Text(
+                        text = release.notes.take(600),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 10,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(bottom = 12.dp)
+                    )
+                }
+                DialogRow("Herunterladen und installieren", onClick = onInstall)
+                DialogRow("Später", onClick = onLater)
+            }
+        }
+    }
+}
+
+/**
+ * Hinweis nach dem Laden einer M3U-Playlist: Die Streams stammen von einem Xtream-Server,
+ * dessen Zugang der Anbieter bestätigt hat — Umwandlung anbieten.
+ */
+@Composable
+fun XtreamSuggestionDialog(
+    suggestion: XtreamSuggestion,
+    onLink: () -> Unit,
+    onConvert: () -> Unit,
+    onLater: () -> Unit,
+    onNever: () -> Unit
+) {
+    val widthModifier = if (LocalIsTv.current) Modifier.width(620.dp) else Modifier.fillMaxWidth()
+    val host = remember(suggestion) { suggestion.account.baseUrl.substringAfter("://") }
+    Dialog(onDismissRequest = onLater) {
+        Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surface) {
+            Column(modifier = Modifier.padding(24.dp).then(widthModifier)) {
+                Text(
+                    text = "Xtream-Zugang erkannt",
+                    style = MaterialTheme.typography.titleLarge,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+                Text(
+                    text = "Die Sender dieser Playlist kommen von $host (Benutzer ${suggestion.account.username}). " +
+                        "Mit dem Xtream-Zugang gibt es zusätzlich Filme, Serien, Catch-up und die Konto-Info.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(bottom = 12.dp)
+                )
+                DialogRow("Verknüpfen — meine Senderliste behalten", maxLines = 2, onClick = onLink)
+                DialogRow("Komplett auf Xtream umstellen — volle Anbieter-Liste + EPG", maxLines = 2, onClick = onConvert)
+                DialogRow("Später (in den Einstellungen)", onClick = onLater)
+                DialogRow("Nein danke", onClick = onNever)
             }
         }
     }

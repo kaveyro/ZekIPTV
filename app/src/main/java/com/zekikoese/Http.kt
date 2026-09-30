@@ -4,6 +4,7 @@ import java.io.BufferedInputStream
 import java.io.IOException
 import java.io.InputStream
 import java.net.HttpURLConnection
+import java.net.InetAddress
 import java.net.URL
 import java.util.zip.GZIPInputStream
 
@@ -53,6 +54,25 @@ object Http {
         val b2 = buffered.read()
         buffered.reset()
         return if (b1 == 0x1f && b2 == 0x8b) GZIPInputStream(buffered) else buffered
+    }
+
+    /**
+     * True, wenn die URL auf ein Gerät im lokalen Netz zeigt (private/Link-local-Adressen,
+     * *.local) — ab Android 17 braucht die App dafür die Berechtigung ACCESS_LOCAL_NETWORK.
+     * Hostnamen werden per DNS aufgelöst (erlaubt) — blockierend, auf IO aufrufen.
+     */
+    fun isLocalNetworkUrl(url: String): Boolean {
+        val host = runCatching { URL(url.trim()).host }.getOrNull()?.trim('[', ']')?.lowercase()
+        if (host.isNullOrEmpty() || host == "localhost") return false
+        if (host.endsWith(".local")) return true
+        val addresses = runCatching { InetAddress.getAllByName(host) }.getOrNull() ?: return false
+        return addresses.any { address ->
+            !address.isLoopbackAddress && (
+                address.isSiteLocalAddress || address.isLinkLocalAddress ||
+                    // IPv6 Unique Local (fc00::/7) meldet isSiteLocalAddress nicht
+                    (address.address.size == 16 && (address.address[0].toInt() and 0xfe) == 0xfc)
+                )
+        }
     }
 
     /** Maskiert Zugangsdaten in URLs (username=/password=) — für Logausgaben. */

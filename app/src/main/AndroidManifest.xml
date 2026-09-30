@@ -3,6 +3,11 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Android 17+: Playlists/Streams im Heimnetz (Tvheadend, NAS …). Wird nur angefragt,
+         wenn eine Playlist-, Stream- oder EPG-Adresse tatsächlich ins lokale Netz zeigt. -->
+    <uses-permission android:name="android.permission.ACCESS_LOCAL_NETWORK" />
+    <!-- Updates aus GitHub-Releases installieren (Sideload-App ohne Play Store). -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <!-- Fire TV / Android TV: Leanback unterstützt, aber App läuft auch auf Handy/Tablet.
          Touchscreen nicht erforderlich (Fire TV hat keinen). -->
@@ -41,6 +46,17 @@
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Gibt heruntergeladene Update-APKs an den System-Installer frei. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
     </application>
 
 </manifest>

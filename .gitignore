@@ -11,3 +11,4 @@
 .cxx
 *.apk
 /.artifacts
+/baselineprofile/build

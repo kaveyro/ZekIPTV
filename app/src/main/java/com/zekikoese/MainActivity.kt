@@ -9,7 +9,9 @@ import android.os.Bundle
 import android.util.Rational
 import androidx.activity.ComponentActivity
 import androidx.activity.viewModels
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.ExperimentalSharedTransitionApi
@@ -57,6 +59,10 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         // Playlist/EPG alle 12 h im Hintergrund aktualisieren.
         RefreshWorker.schedule(applicationContext)
+        // Timeshift-Reste einer früheren (z. B. abgestürzten) Sitzung entfernen.
+        if (savedInstanceState == null) {
+            Thread { TimeshiftRecorder.cleanUp(cacheDir) }.start()
+        }
         setContent {
             val mainViewModel = this@MainActivity.mainViewModel
             val themeMode by mainViewModel.themeMode
@@ -82,6 +88,18 @@ class MainActivity : ComponentActivity() {
                     ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
                 } else {
                     ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+                }
+            }
+
+            // Android 17+: Heimnetz-Berechtigung anfragen, sobald das ViewModel sie braucht.
+            val localNetworkLauncher = rememberLauncherForActivityResult(
+                ActivityResultContracts.RequestPermission()
+            ) { granted -> mainViewModel.onLocalNetworkPermissionResult(granted) }
+            val localNetworkRequest by mainViewModel.localNetworkPermissionRequest
+            LaunchedEffect(localNetworkRequest) {
+                if (localNetworkRequest) {
+                    runCatching { localNetworkLauncher.launch(MainViewModel.LOCAL_NETWORK_PERMISSION) }
+                        .onFailure { mainViewModel.onLocalNetworkPermissionResult(false) }
                 }
             }
 
@@ -214,6 +232,8 @@ fun IptvApp(mainViewModel: MainViewModel = viewModel()) {
                             resumeMs = mainViewModel.resumeFor(it.url),
                             sleepMinutes = mainViewModel.sleepTimerMinutes.value,
                             resizeMode = mainViewModel.resizeMode.value,
+                            autoFrameRate = mainViewModel.autoFrameRate.value,
+                            timeshiftEnabled = mainViewModel.timeshift.value,
                             onCycleResize = { mainViewModel.cycleResizeMode() },
                             onJumpToNumber = if (it.isLive) {
                                 { number -> mainViewModel.jumpToChannelNumber(number) }

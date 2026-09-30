@@ -1,0 +1,80 @@
+name: Release
+
+# Baut beim Pushen eines Versions-Tags (z. B. v1.9.0) das signierte Release-APK und hängt es an
+# das GitHub-Release — die App findet es darüber per Update-Prüfung.
+#
+# Benötigte Repository-Secrets (Settings > Secrets and variables > Actions):
+#   KEYSTORE_BASE64    base64-kodierter Release-Keystore (derselbe wie bisher, sonst schlagen Updates fehl)
+#   KEYSTORE_PASSWORD  Keystore-Passwort
+#   KEY_ALIAS          Schlüssel-Alias
+#   KEY_PASSWORD       Schlüssel-Passwort
+# Ohne Secrets wird der Job übersprungen (ein unsigniertes APK wäre für Updates unbrauchbar).
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      HAS_SIGNING: ${{ secrets.KEYSTORE_BASE64 != '' }}
+    steps:
+      - name: Signier-Secrets fehlen
+        if: env.HAS_SIGNING != 'true'
+        run: echo "::notice::Keine Signier-Secrets hinterlegt — Release-Build übersprungen."
+
+      - uses: actions/checkout@v4
+        if: env.HAS_SIGNING == 'true'
+
+      - uses: actions/setup-java@v4
+        if: env.HAS_SIGNING == 'true'
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: gradle/actions/setup-gradle@v4
+        if: env.HAS_SIGNING == 'true'
+
+      - name: Keystore bereitstellen
+        if: env.HAS_SIGNING == 'true'
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          mkdir -p keystore
+          echo "$KEYSTORE_BASE64" | base64 --decode > keystore/release.keystore
+          {
+            echo "storeFile=release.keystore"
+            echo "storePassword=$KEYSTORE_PASSWORD"
+            echo "keyAlias=$KEY_ALIAS"
+            echo "keyPassword=$KEY_PASSWORD"
+          } > keystore/keystore.properties
+
+      - name: Tests und Release-Build
+        if: env.HAS_SIGNING == 'true'
+        run: ./gradlew --no-daemon testDebugUnitTest lintRelease assembleRelease
+
+      - name: APK an Release anhängen
+        if: env.HAS_SIGNING == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          VERSION="${TAG#v}"
+          cp app/build/outputs/apk/release/app-release.apk "ZekIPTV-$VERSION.apk"
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" "ZekIPTV-$VERSION.apk" --clobber
+          else
+            gh release create "$TAG" "ZekIPTV-$VERSION.apk" --title "ZekIPTV $VERSION" --generate-notes
+          fi
+
+      - name: Keystore entfernen
+        if: always() && env.HAS_SIGNING == 'true'
+        run: rm -rf keystore

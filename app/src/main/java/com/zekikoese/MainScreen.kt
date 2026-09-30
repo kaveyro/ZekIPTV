@@ -1,6 +1,8 @@
 package com.zekikoese
 
 import android.content.Intent
+import android.net.Uri
+import android.provider.Settings
 import android.speech.RecognizerIntent
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -72,6 +74,7 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -160,6 +163,30 @@ fun MainScreen(mainViewModel: MainViewModel = viewModel()) {
             },
             onToggleFavorite = { mainViewModel.toggleFavorite(dialogChannel) },
             onDismiss = { actionsChannel = null }
+        )
+    }
+
+    val xtreamSuggestion by mainViewModel.xtreamSuggestion
+    val showXtreamDialog by mainViewModel.xtreamSuggestionDialog
+    val suggestion = xtreamSuggestion
+    if (suggestion != null && showXtreamDialog) {
+        XtreamSuggestionDialog(
+            suggestion = suggestion,
+            onLink = mainViewModel::linkXtreamSuggestion,
+            onConvert = mainViewModel::convertXtreamSuggestion,
+            onLater = { mainViewModel.xtreamSuggestionDialog.value = false },
+            onNever = mainViewModel::dismissXtreamSuggestion
+        )
+    }
+
+    val update by mainViewModel.availableUpdate
+    val showUpdateDialog by mainViewModel.updateDialog
+    val release = update
+    if (release != null && showUpdateDialog && suggestion == null) {
+        UpdateDialog(
+            release = release,
+            onInstall = mainViewModel::installUpdate,
+            onLater = mainViewModel::dismissUpdateDialog
         )
     }
 
@@ -512,11 +539,40 @@ private fun LiveScreen(
                             }
                         }
                         is PlaylistUiState.Error -> {
-                            EmptyState(
-                                icon = Icons.Filled.Info,
-                                title = "Fehler",
-                                subtitle = (uiState as PlaylistUiState.Error).message
-                            )
+                            val context = LocalContext.current
+                            val localNetworkDenied by mainViewModel.localNetworkDenied
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                EmptyState(
+                                    icon = Icons.Filled.Info,
+                                    title = "Fehler",
+                                    subtitle = (uiState as PlaylistUiState.Error).message
+                                )
+                                Spacer(Modifier.height(24.dp))
+                                // Neu laden direkt aus dem Fehlerzustand (Pull-to-Refresh greift hier
+                                // nicht, und auf dem TV gibt es ihn ohnehin nicht).
+                                Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                                    TvButton(text = "Erneut versuchen", onClick = { mainViewModel.loadPlaylist() })
+                                    // Nach zweimaligem Ablehnen fragt Android nicht mehr nach — dann nur
+                                    // noch über die App-Einstellungen erlaubbar.
+                                    if (localNetworkDenied) {
+                                        TvButton(
+                                            text = "App-Einstellungen öffnen",
+                                            onClick = {
+                                                runCatching {
+                                                    context.startActivity(
+                                                        Intent(
+                                                            Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                                            Uri.fromParts("package", context.packageName, null)
+                                                        ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                                    )
+                                                }
+                                            },
+                                            containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                                            contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+                                        )
+                                    }
+                                }
+                            }
                         }
                         else -> {
                             if (channels.isEmpty()) {

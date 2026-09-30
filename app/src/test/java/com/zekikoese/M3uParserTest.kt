@@ -152,4 +152,15 @@ class M3uParserTest {
         )
         assertEquals("Filme", channels[0].group)
     }
+
+    @Test
+    fun `reads user agent attribute of xtream panels`() {
+        val channels = parse(
+            """
+            #EXTINF:-1 tvg-ID="x" user-agent="okhttp/4.10.0" group-title="Sport",Kanal
+            http://example.com/u/p/1
+            """.trimIndent()
+        )
+        assertEquals("okhttp/4.10.0", channels[0].userAgent)
+    }
 }

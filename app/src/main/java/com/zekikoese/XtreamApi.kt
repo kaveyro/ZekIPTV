@@ -56,6 +56,8 @@ data class SeriesEpisode(
 
 /** Konto-Status beim Anbieter (player_api.php ohne action). */
 data class XtreamAccountInfo(
+    /** user_info.auth == 1: Zugangsdaten vom Server akzeptiert. */
+    val authenticated: Boolean,
     val status: String?,
     /** Ablaufdatum in ms seit Epoch; null = unbegrenzt/unbekannt. */
     val expiresAtMs: Long?,
@@ -74,6 +76,53 @@ fun xtreamStreamIdOf(channelUrl: String): String? {
     val path = runCatching { URL(channelUrl.trim()).path }.getOrNull() ?: return null
     val last = path.substringAfterLast('/').substringBefore('.')
     return last.takeIf { it.isNotEmpty() && it.all(Char::isDigit) }
+}
+
+// Pfad einer Xtream-Stream-URL: [/live|/movie|/series]/USER/PASS/ID[.ext]
+private val XTREAM_STREAM_PATH = Regex("^/(?:live/|movie/|series/)?([^/]+)/([^/]+)/(\\d+)(?:\\.[A-Za-z0-9]+)?$")
+
+/**
+ * Leitet aus den Stream-URLs einer normalen M3U-Playlist einen Xtream-Zugang ab — viele
+ * Anbieter-Playlists (auch gekürzte Links oder selbst zusammengestellte Listen) verweisen auf
+ * Streams der Form http://host/live/USER/PASS/123.ts. Gewählt wird die häufigste Kombination;
+ * ob sie wirklich ein Xtream-Zugang ist, muss per [XtreamApi.getAccountInfo] geprüft werden.
+ */
+fun detectXtreamFromChannels(channels: List<Channel>): XtreamAccount? {
+    val candidates = HashMap<XtreamAccount, Int>()
+    for (channel in channels) {
+        val url = runCatching { URL(channel.url.trim()) }.getOrNull() ?: continue
+        if (url.protocol != "http" && url.protocol != "https") continue
+        val match = XTREAM_STREAM_PATH.matchEntire(url.path) ?: continue
+        fun decode(value: String) = runCatching { URLDecoder.decode(value, "UTF-8") }.getOrDefault(value)
+        val port = if (url.port != -1) ":${url.port}" else ""
+        val account = XtreamAccount(
+            baseUrl = "${url.protocol}://${url.host}$port",
+            username = decode(match.groupValues[1]),
+            password = decode(match.groupValues[2])
+        )
+        candidates[account] = (candidates[account] ?: 0) + 1
+    }
+    return candidates.maxByOrNull { it.value }?.key
+}
+
+/** "m3u8", wenn die Playlist überwiegend HLS-Streams enthält, sonst "ts" (Xtream-Standard). */
+fun preferredXtreamOutput(channels: List<Channel>): String {
+    val hls = channels.count { it.url.substringBefore('?').endsWith(".m3u8", ignoreCase = true) }
+    return if (hls * 2 > channels.size) "m3u8" else "ts"
+}
+
+/** get.php-Playlist-URL eines Xtream-Zugangs (Format m3u_plus mit Logos/Gruppen). */
+fun xtreamPlaylistUrl(account: XtreamAccount, output: String = "ts"): String {
+    val u = URLEncoder.encode(account.username, "UTF-8")
+    val p = URLEncoder.encode(account.password, "UTF-8")
+    return "${account.baseUrl}/get.php?username=$u&password=$p&type=m3u_plus&output=$output"
+}
+
+/** Normalisiert eine eingegebene Server-Adresse ("host:8080/" -> "http://host:8080"). */
+fun normalizeXtreamServer(input: String): String {
+    val trimmed = input.trim().trimEnd('/')
+    return if (trimmed.startsWith("http://", true) || trimmed.startsWith("https://", true)) trimmed
+    else "http://$trimmed"
 }
 
 /** Ein abspielbares Medium: Live-Sender, Film, Serien-Episode oder Catch-up-Sendung. */
@@ -140,6 +189,7 @@ class XtreamApi(
         fun text(obj: JSONObject, name: String): String? =
             obj.optString(name).ifEmpty { null }?.takeIf { it != "null" }
         return XtreamAccountInfo(
+            authenticated = text(user, "auth") == "1",
             status = text(user, "status"),
             // exp_date: Unix-Sekunden (als Zahl oder String); fehlt bei unbegrenzten Konten.
             expiresAtMs = text(user, "exp_date")?.toLongOrNull()?.takeIf { it > 0 }?.times(1000),

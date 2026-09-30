@@ -37,7 +37,8 @@ class M3uParser {
                     pendingLogo = attrs["tvg-logo"]?.ifEmpty { null }
                     pendingGroup = attrs["group-title"]?.ifEmpty { null }
                     pendingTvgId = attrs["tvg-id"]?.ifEmpty { null }
-                    attrs["http-user-agent"]?.ifEmpty { null }?.let { pendingUserAgent = it }
+                    // User-Agent als Attribut: "http-user-agent" (VLC-Stil) oder "user-agent" (Xtream-Panels).
+                    (attrs["http-user-agent"] ?: attrs["user-agent"])?.ifEmpty { null }?.let { pendingUserAgent = it }
                     attrs["http-referrer"]?.ifEmpty { null }?.let { pendingReferrer = it }
                 }
 

@@ -46,6 +46,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.zekikoese.ui.LocalIsTv
 import com.zekikoese.ui.tvFocusFrame
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -73,6 +74,7 @@ fun SettingsScreen(mainViewModel: MainViewModel) {
     val epgInfo by mainViewModel.epgInfo
     val allGroups by mainViewModel.allGroups
     val hiddenGroups by mainViewModel.hiddenGroups
+    val isTv = LocalIsTv.current
 
     var showPlaylistDialog by remember { mutableStateOf(false) }
     var showEpgDialog by remember { mutableStateOf(false) }
@@ -109,7 +111,8 @@ fun SettingsScreen(mainViewModel: MainViewModel) {
             val isActive = entry.url == activeUrl
             SettingsRow(
                 title = if (isActive) "${entry.name}   ✓" else entry.name,
-                subtitle = entry.url,
+                // Zugangsdaten nicht im Klartext anzeigen (Xtream-URLs enthalten Benutzer/Passwort).
+                subtitle = Http.redact(entry.url),
                 isSelected = isActive,
                 onClick = {
                     mainViewModel.selectPlaylist(entry)
@@ -125,6 +128,42 @@ fun SettingsScreen(mainViewModel: MainViewModel) {
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
             )
+        }
+        // Erkannter, noch nicht übernommener Xtream-Zugang der aktiven M3U-Playlist.
+        item {
+            val suggestion by mainViewModel.xtreamSuggestion
+            val current = suggestion
+            if (current != null) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(MaterialTheme.colorScheme.secondaryContainer)
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text(
+                        "Xtream-Zugang erkannt (${current.account.baseUrl.substringAfter("://")}, " +
+                            "Benutzer ${current.account.username}) — damit gibt es auch Filme, Serien und Catch-up.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer
+                    )
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        TvButton(text = "Verknüpfen", onClick = { mainViewModel.linkXtreamSuggestion() })
+                        TvButton(text = "Komplett umstellen", onClick = { mainViewModel.convertXtreamSuggestion() })
+                        TvButton(
+                            text = "Nein danke",
+                            onClick = { mainViewModel.dismissXtreamSuggestion() },
+                            containerColor = Color.Transparent,
+                            contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                            borderColor = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.5f)
+                        )
+                    }
+                }
+            }
         }
         item {
             TvButton(
@@ -151,6 +190,14 @@ fun SettingsScreen(mainViewModel: MainViewModel) {
                             style = MaterialTheme.typography.bodyMedium
                         )
                     } else {
+                        val linkedAccount by mainViewModel.xtreamLinked
+                        if (linkedAccount) {
+                            Text(
+                                "Verknüpft mit der M3U-Playlist (erkannt aus den Stream-Adressen).",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                            )
+                        }
                         Text(
                             "Status: ${current.status ?: "unbekannt"}" + if (current.isTrial) " (Testzugang)" else "",
                             style = MaterialTheme.typography.bodyMedium
@@ -167,7 +214,21 @@ fun SettingsScreen(mainViewModel: MainViewModel) {
                         }
                     }
                     Spacer(Modifier.height(8.dp))
-                    TvButton(text = "Konto-Info aktualisieren", onClick = { mainViewModel.refreshAccountInfo() })
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        TvButton(text = "Konto-Info aktualisieren", onClick = { mainViewModel.refreshAccountInfo() })
+                        val linkedAccount by mainViewModel.xtreamLinked
+                        if (linkedAccount) {
+                            TvButton(
+                                text = "Verknüpfung lösen",
+                                onClick = { mainViewModel.unlinkXtream() },
+                                containerColor = MaterialTheme.colorScheme.errorContainer,
+                                contentColor = MaterialTheme.colorScheme.onErrorContainer
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -215,6 +276,50 @@ fun SettingsScreen(mainViewModel: MainViewModel) {
             }
         }
         item {
+            val timeshiftOn by mainViewModel.timeshift
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                    itemVerticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Timeshift (Live-TV pausieren/zurückspulen):", style = MaterialTheme.typography.bodyMedium)
+                GroupChip("An", selected = timeshiftOn) { mainViewModel.setTimeshift(true) }
+                GroupChip("Aus", selected = !timeshiftOn) { mainViewModel.setTimeshift(false) }
+            }
+        }
+        item {
+            Text(
+                "Nimmt Live-Sender während des Schauens auf (bis 30 min, max. 1 GB Zwischenspeicher) — " +
+                    "Pause und Zurückspulen wie beim Festplattenrekorder. Der Senderstart dauert ca. 2 s länger. " +
+                    "HLS-Sender (.m3u8) nutzen das Zeitfenster des Anbieters.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+            )
+        }
+        // Automatische Bildwiederholrate — nur sinnvoll am Fernseher.
+        if (isTv) {
+            item {
+                val afr by mainViewModel.autoFrameRate
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    itemVerticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Bildwiederholrate an Video anpassen:", style = MaterialTheme.typography.bodyMedium)
+                    GroupChip("An", selected = afr) { mainViewModel.setAutoFrameRate(true) }
+                    GroupChip("Aus", selected = !afr) { mainViewModel.setAutoFrameRate(false) }
+                }
+            }
+            item {
+                Text(
+                    "Schaltet den Fernseher z. B. für deutsches TV auf 50 Hz und für Filme auf 24 Hz — " +
+                        "flüssigere Schwenks. Beim Umschalten kann das Bild kurz schwarz werden.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                )
+            }
+        }
+        item {
             Text(
                 "Tipp: Im Player öffnet ◀ (links) die Senderliste zum Zappen, ▲ (hoch) die Programm-Info " +
                     "und die MENÜ-Taste (☰) Senderwechsel, Tonspur, Untertitel und Sleep-Timer. " +
@@ -252,6 +357,46 @@ fun SettingsScreen(mainViewModel: MainViewModel) {
                             selected = !hidden
                         ) { mainViewModel.toggleHiddenGroup(group) }
                     }
+                }
+            }
+        }
+
+        // ---------- App-Update ----------
+        item { SectionTitle("App-Update", icon = Icons.Filled.Info) }
+        item {
+            val update by mainViewModel.availableUpdate
+            val status by mainViewModel.updateStatus
+            val inProgress by mainViewModel.updateInProgress
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    "Installierte Version: ${BuildConfig.VERSION_NAME}" +
+                        (update?.let { " · verfügbar: ${it.version}" } ?: ""),
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    val available = update
+                    if (available != null) {
+                        TvButton(
+                            text = if (inProgress) "Wird geladen…" else "Version ${available.version} installieren",
+                            onClick = { mainViewModel.installUpdate() }
+                        )
+                    }
+                    TvButton(
+                        text = "Nach Updates suchen",
+                        onClick = { mainViewModel.checkForUpdates(manual = true) },
+                        containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+                    )
+                }
+                if (status.isNotEmpty()) {
+                    Text(
+                        status,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                    )
                 }
             }
         }
@@ -413,6 +558,7 @@ fun SettingsScreen(mainViewModel: MainViewModel) {
     if (showPlaylistDialog) {
         PlaylistInputDialog(
             onConfirm = { name, url -> mainViewModel.addPlaylist(name, url) },
+            onConfirmXtream = { name, server, user, pass -> mainViewModel.addXtreamLogin(name, server, user, pass) },
             onDismiss = { showPlaylistDialog = false }
         )
     }

@@ -188,4 +188,61 @@ class XtreamApiTest {
         val url = api.timeshiftUrl("99", start, start + 44 * 60_000 + 1, "Europe/Berlin")
         assertEquals("http://host.tv:80/timeshift/user1/pass1/45/2026-01-10:19-00/99.ts", url)
     }
+
+    @Test
+    fun `detects xtream account from m3u stream urls`() {
+        val channels = listOf(
+            Channel("A", "http://prov.tv:8080/live/max/geheim/101.ts"),
+            Channel("B", "http://prov.tv:8080/max/geheim/102"),
+            Channel("C", "http://prov.tv:8080/movie/max/geheim/7.mkv"),
+            Channel("Fremd", "https://cdn.example.com/hls/kanal/index.m3u8")
+        )
+        assertEquals(XtreamAccount("http://prov.tv:8080", "max", "geheim"), detectXtreamFromChannels(channels))
+    }
+
+    @Test
+    fun `picks the most common account and decodes credentials`() {
+        val channels = listOf(
+            Channel("A", "http://a.tv/live/u%40x/p%26w/1.ts"),
+            Channel("B", "http://a.tv/live/u%40x/p%26w/2.ts"),
+            Channel("C", "http://b.tv/live/other/pw/3.ts")
+        )
+        assertEquals(XtreamAccount("http://a.tv", "u@x", "p&w"), detectXtreamFromChannels(channels))
+    }
+
+    @Test
+    fun `no xtream account in plain hls playlists`() {
+        val channels = listOf(
+            Channel("A", "https://cdn.example.com/hls/kanal/index.m3u8"),
+            Channel("B", "rtmp://host/app/stream")
+        )
+        assertNull(detectXtreamFromChannels(channels))
+    }
+
+    @Test
+    fun `builds get php playlist url and preferred output`() {
+        val account = XtreamAccount("http://prov.tv:8080", "max", "a&b")
+        assertEquals(
+            "http://prov.tv:8080/get.php?username=max&password=a%26b&type=m3u_plus&output=m3u8",
+            xtreamPlaylistUrl(account, "m3u8")
+        )
+        // Rückweg: die erzeugte URL wird wieder als Xtream erkannt.
+        assertEquals(account, detectXtream(xtreamPlaylistUrl(account)))
+        assertEquals("m3u8", preferredXtreamOutput(listOf(Channel("A", "http://h/live/u/p/1.m3u8"))))
+        assertEquals("ts", preferredXtreamOutput(listOf(Channel("A", "http://h/live/u/p/1.ts"))))
+    }
+
+    @Test
+    fun `normalizes entered server addresses`() {
+        assertEquals("http://prov.tv:8080", normalizeXtreamServer(" prov.tv:8080/ "))
+        assertEquals("https://prov.tv", normalizeXtreamServer("https://prov.tv"))
+    }
+
+    @Test
+    fun `reads auth flag of account info`() {
+        val ok = XtreamApi(account) { """{"user_info":{"auth":1,"status":"Active"}}""" }.getAccountInfo()
+        val denied = XtreamApi(account) { """{"user_info":{"auth":0}}""" }.getAccountInfo()
+        assertEquals(true, ok.authenticated)
+        assertEquals(false, denied.authenticated)
+    }
 }

@@ -2,6 +2,9 @@ package com.zekikoese
 
 import android.app.Activity
 import android.content.pm.ActivityInfo
+import android.net.Uri
+import android.os.Handler
+import android.os.Looper
 import android.view.KeyEvent
 import androidx.activity.compose.BackHandler
 import androidx.annotation.OptIn
@@ -59,14 +62,17 @@ import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.video.VideoFrameMetadataListener
 import androidx.media3.session.MediaSession
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
@@ -74,6 +80,8 @@ import com.zekikoese.ui.LocalInPictureInPicture
 import com.zekikoese.ui.LocalIsTv
 import com.zekikoese.ui.tvFocusFrame
 import kotlinx.coroutines.delay
+import java.io.File
+import java.util.concurrent.atomic.AtomicBoolean
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -112,6 +120,8 @@ fun VideoPlayer(
     resumeMs: Long,
     sleepMinutes: Int?,
     resizeMode: String,
+    autoFrameRate: Boolean,
+    timeshiftEnabled: Boolean,
     onCycleResize: () -> Unit,
     onJumpToNumber: ((Int) -> Boolean)?,
     onBack: () -> Unit,
@@ -147,6 +157,12 @@ fun VideoPlayer(
     var reconnectAttempt by remember { mutableStateOf(0) }
     var reconnectTrigger by remember { mutableStateOf(0) }
     var playerError by remember { mutableStateOf<String?>(null) }
+    // Timeshift: aktueller Rekorder + Abstand zum Live-Bild (ms) für Badge und Menü.
+    val recorder = remember { mutableStateOf<TimeshiftRecorder?>(null) }
+    var timeshiftActive by remember { mutableStateOf(false) }
+    var liveOffsetMs by remember { mutableStateOf(0L) }
+    // Nach Rückkehr aus dem Hintergrund neu einschalten (Aufnahme wird dort gestoppt).
+    var retuneKey by remember { mutableStateOf(0) }
 
     // Cross-Protocol-Redirects erlauben: VOD-/Serien-Streams dieses Anbieters leiten
     // von http auf https um — das folgt ExoPlayers HTTP-Quelle standardmäßig nicht.
@@ -160,7 +176,11 @@ fun VideoPlayer(
     }
     val exoPlayer = remember {
         val dataSourceFactory = DefaultDataSource.Factory(context, httpFactory)
-        ExoPlayer.Builder(context)
+        // FFmpeg-Decoder als Rückfallebene: Geräte-Decoder (inkl. Dolby-Passthrough am TV)
+        // haben Vorrang, FFmpeg springt nur für sonst nicht abspielbare Tonformate ein.
+        val renderersFactory = DefaultRenderersFactory(context)
+            .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
+        ExoPlayer.Builder(context, renderersFactory)
             .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
             // Spul-Schritte der Steuerleiste: 10 s zurück / 30 s vor (VOD/Serien).
             .setSeekBackIncrementMs(10_000)
@@ -223,19 +243,49 @@ fun VideoPlayer(
     }
 
     // Kanal-/Medienwechsel ohne Player-Neuaufbau; VOD an gespeicherter Position fortsetzen.
-    LaunchedEffect(media.url) {
+    LaunchedEffect(media.url, timeshiftEnabled, retuneKey) {
         reconnectAttempt = 0
         playerError = null
-        httpFactory.setUserAgent(media.userAgent ?: DEFAULT_USER_AGENT)
+        recorder.value?.stop()
+        recorder.value = null
+        timeshiftActive = false
+        liveOffsetMs = 0L
+        val userAgent = media.userAgent ?: DEFAULT_USER_AGENT
+        httpFactory.setUserAgent(userAgent)
         httpFactory.setDefaultRequestProperties(
             media.referrer?.let { mapOf("Referer" to it) } ?: emptyMap()
         )
-        exoPlayer.setMediaItem(
-            MediaItem.Builder()
-                .setUri(media.url)
-                .setMediaMetadata(MediaMetadata.Builder().setTitle(media.title).build())
-                .build()
-        )
+        val item = MediaItem.Builder()
+            .setMediaMetadata(MediaMetadata.Builder().setTitle(media.title).build())
+        if (media.isLive && timeshiftEnabled && TimeshiftRecorder.supports(media.url)) {
+            // Erst die bisherige Verbindung schließen — viele Konten erlauben nur eine.
+            exoPlayer.stop()
+            val cacheDir = context.cacheDir
+            val session = TimeshiftRecorder(
+                url = media.url,
+                userAgent = userAgent,
+                referrer = media.referrer,
+                dir = File(TimeshiftRecorder.baseDir(cacheDir), System.nanoTime().toString()),
+                maxBytes = TimeshiftRecorder.maxBytesFor(cacheDir)
+            )
+            session.start()
+            recorder.value = session
+            if (session.awaitReady(15_000)) {
+                timeshiftActive = true
+                item.setUri(Uri.fromFile(session.playlistFile))
+                    .setMimeType(MimeTypes.APPLICATION_M3U8)
+                    // Nah am Live-Rand starten (Standard wären 3 Segmentdauern Abstand).
+                    .setLiveConfiguration(MediaItem.LiveConfiguration.Builder().setTargetOffsetMs(3_000).build())
+            } else {
+                // Aufnahme klappt nicht (z. B. kein TS-Stream) — direkt abspielen.
+                session.stop()
+                recorder.value = null
+                item.setUri(media.url)
+            }
+        } else {
+            item.setUri(media.url)
+        }
+        exoPlayer.setMediaItem(item.build())
         exoPlayer.prepare()
         if (!media.isLive && resumeMs > 10_000) {
             exoPlayer.seekTo(resumeMs)
@@ -275,6 +325,21 @@ fun VideoPlayer(
         }
     }
 
+    // Abstand zum Live-Bild verfolgen (Timeshift-Badge, "Zum Live-Bild" im Menü).
+    LaunchedEffect(media.url, timeshiftActive) {
+        if (!media.isLive) return@LaunchedEffect
+        while (true) {
+            // currentLiveOffset braucht Uhrzeit-Tags (PROGRAM-DATE-TIME). Die lokale Timeshift-Liste
+            // hat bewusst keine — sonst würde ExoPlayer nach einer Pause per Tempoanpassung heimlich
+            // wieder zum Live-Bild aufholen. Dann: Fensterlänge minus Position.
+            val offset = exoPlayer.currentLiveOffset.takeIf { it != C.TIME_UNSET }
+                ?: exoPlayer.duration.takeIf { it != C.TIME_UNSET && exoPlayer.isCurrentMediaItemLive }
+                    ?.let { (it - exoPlayer.currentPosition).coerceAtLeast(0L) }
+            liveOffsetMs = offset ?: 0L
+            delay(1_000)
+        }
+    }
+
     // HOME/Standby: Wiedergabe pausieren; bei Rückkehr fortsetzen. Ressourcen freigeben.
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
@@ -285,8 +350,17 @@ fun VideoPlayer(
                 Lifecycle.Event.ON_STOP -> {
                     resumeOnStart = exoPlayer.playWhenReady
                     exoPlayer.pause()
+                    // Keine endlose Hintergrund-Aufnahme: Timeshift stoppen, beim Zurückkehren neu starten.
+                    if (recorder.value != null) {
+                        recorder.value?.stop()
+                        recorder.value = null
+                        exoPlayer.stop()
+                    }
                 }
-                Lifecycle.Event.ON_START -> if (resumeOnStart) exoPlayer.play()
+                Lifecycle.Event.ON_START -> {
+                    if (timeshiftActive && recorder.value == null) retuneKey++
+                    else if (resumeOnStart) exoPlayer.play()
+                }
                 else -> Unit
             }
         }
@@ -294,9 +368,40 @@ fun VideoPlayer(
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
             saveVodPosition(exoPlayer, currentMedia, currentOnSaveResume)
+            recorder.value?.stop()
             mediaSession.release()
             exoPlayer.release()
         }
+    }
+
+    // TV: Bildwiederholrate an das Video anpassen (25/50 fps -> 50 Hz, Filme -> 23,976/24 Hz),
+    // damit Schwenks nicht ruckeln. Wir schalten den Anzeigemodus selbst — Media3s eigene
+    // Frame-Rate-Strategie dann aus, sonst konkurrieren beide.
+    val frameRateController = remember(autoFrameRate, isTv) {
+        (context as? Activity)?.takeIf { autoFrameRate && isTv }?.let(::FrameRateController)
+    }
+    DisposableEffect(frameRateController) {
+        if (frameRateController != null) {
+            exoPlayer.setVideoChangeFrameRateStrategy(C.VIDEO_CHANGE_FRAME_RATE_STRATEGY_OFF)
+        }
+        // Erst beim Verlassen des Players (nicht beim Zappen) den alten Modus wiederherstellen.
+        onDispose { frameRateController?.restore() }
+    }
+    DisposableEffect(frameRateController, media.url) {
+        val controller = frameRateController ?: return@DisposableEffect onDispose { }
+        val estimator = FrameRateEstimator()
+        val reported = AtomicBoolean(false)
+        val mainHandler = Handler(Looper.getMainLooper())
+        // Läuft auf dem Playback-Thread: Bildrate aus dem Format oder aus den Zeitstempeln.
+        val listener = VideoFrameMetadataListener { presentationTimeUs, _, format, _ ->
+            if (reported.get()) return@VideoFrameMetadataListener
+            val fps = format.frameRate.takeIf { it > 0f } ?: estimator.onFrame(presentationTimeUs)
+            if (fps != null && reported.compareAndSet(false, true)) {
+                mainHandler.post { controller.onFrameRate(fps) }
+            }
+        }
+        exoPlayer.setVideoFrameMetadataListener(listener)
+        onDispose { exoPlayer.clearVideoFrameMetadataListener(listener) }
     }
 
     // Direktwahl: 2 s nach der letzten Ziffer (oder sofort bei 4 Ziffern) umschalten.
@@ -417,6 +522,25 @@ fun VideoPlayer(
                 if (inPip) view.hideController()
             }
         )
+
+        // Timeshift: Rückstand zum Live-Bild oben rechts, solange man zeitversetzt schaut.
+        // Handy: nicht über der Touch-Button-Reihe — bei sichtbarer Steuerleiste zeigt die Zeitleiste die Position.
+        if (media.isLive && liveOffsetMs > 15_000 && !inPip && numberInput.value.isEmpty() &&
+            (isTv || !controllerVisible.value)
+        ) {
+            val seconds = liveOffsetMs / 1000
+            Text(
+                text = "⏪ −%d:%02d".format(seconds / 60, seconds % 60),
+                color = Color.White,
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(24.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(Color.Black.copy(alpha = 0.6f))
+                    .padding(horizontal = 14.dp, vertical = 6.dp)
+            )
+        }
 
         // Direktwahl-Anzeige oben rechts.
         if (numberInput.value.isNotEmpty() && !inPip) {
@@ -604,6 +728,9 @@ fun VideoPlayer(
                 sleepMinutes = sleepMinutes,
                 resizeMode = resizeMode,
                 onCycleResize = onCycleResize,
+                onGoLive = if (media.isLive && liveOffsetMs > 15_000) {
+                    { exoPlayer.seekToDefaultPosition(); exoPlayer.play() }
+                } else null,
                 onZap = currentOnZap,
                 onSwapLast = currentOnSwapLast,
                 onCycleSleep = onCycleSleep,
@@ -635,6 +762,7 @@ private fun PlayerMenuDialog(
     sleepMinutes: Int?,
     resizeMode: String,
     onCycleResize: () -> Unit,
+    onGoLive: (() -> Unit)?,
     onZap: ((Int) -> Unit)?,
     onSwapLast: (() -> Unit)?,
     onCycleSleep: () -> Unit,
@@ -667,6 +795,11 @@ private fun PlayerMenuDialog(
                     style = MaterialTheme.typography.titleLarge,
                     modifier = Modifier.padding(bottom = 12.dp)
                 )
+
+                // Timeshift: zurück zum aktuellen Live-Bild.
+                if (onGoLive != null) {
+                    MenuRow(label = "⏩ Zum Live-Bild", onClick = { onGoLive(); onDismiss() })
+                }
 
                 // Senderwechsel (nur Live, nur TV) — konfliktfrei per Menü statt DPAD.
                 if (isTv && onZap != null) {

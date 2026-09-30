@@ -3,6 +3,7 @@ import java.util.Properties
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.plugin.compose")
+    id("androidx.baselineprofile")
 }
 
 // Signierdaten liegen gitignoriert in keystore/keystore.properties (nicht committen!).
@@ -18,11 +19,17 @@ android {
     defaultConfig {
         applicationId = "com.zekikoese"
         minSdk = 24
-        targetSdk = 36
-        versionCode = 11
-        versionName = "1.8.0"
+        targetSdk = 37
+        versionCode = 12
+        versionName = "1.9.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        // Native FFmpeg-Bibliothek nur für ARM (Fire TV / Android TV / Handys) und x86_64
+        // (Emulator) — x86 (32 bit) spart Platz, dafür gibt es keine relevanten Geräte mehr.
+        ndk {
+            abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86_64")
+        }
         vectorDrawables {
             useSupportLibrary = true
         }
@@ -58,6 +65,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true // VERSION_NAME für die Update-Prüfung
     }
     packaging {
         resources {
@@ -94,6 +102,13 @@ dependencies {
     implementation(libs.androidx.media3.ui)
     // MediaSession: Medientasten der Fernbedienung / Systemsteuerung der Wiedergabe
     implementation(libs.androidx.media3.session)
+    // FFmpeg-Audio-Decoder (Jellyfin-Build, GPL-3.0): AC3/E-AC3/DTS/MP2, wenn das Gerät sie
+    // nicht selbst dekodieren kann — viele IPTV-Sender senden Dolby-Ton.
+    implementation(libs.jellyfin.media3.ffmpeg.decoder)
+
+    // Installiert das mitgelieferte Baseline Profile auch bei Sideload (ohne Play Store).
+    implementation(libs.androidx.profileinstaller)
+    baselineProfile(project(":baselineprofile"))
 
     // Persistenz (URL, Kanäle, Favoriten)
     implementation(libs.androidx.datastore.preferences)
