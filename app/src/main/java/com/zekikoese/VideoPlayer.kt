@@ -46,7 +46,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
@@ -58,6 +58,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
+import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionOverride
@@ -66,7 +67,10 @@ import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.session.MediaSession
+import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
+import com.zekikoese.ui.LocalInPictureInPicture
 import com.zekikoese.ui.LocalIsTv
 import com.zekikoese.ui.tvFocusFrame
 import kotlinx.coroutines.delay
@@ -75,6 +79,28 @@ import java.util.Date
 import java.util.Locale
 
 private const val MAX_RECONNECT_ATTEMPTS = 5
+private const val DEFAULT_USER_AGENT = "IPTV/1.2 (Android TV)"
+private const val MAX_NUMBER_DIGITS = 4
+
+/** Ziffer einer Zahlentaste (Fernbedienung oder Nummernblock), sonst null. */
+private fun digitOf(keyCode: Int): Int? = when (keyCode) {
+    in KeyEvent.KEYCODE_0..KeyEvent.KEYCODE_9 -> keyCode - KeyEvent.KEYCODE_0
+    in KeyEvent.KEYCODE_NUMPAD_0..KeyEvent.KEYCODE_NUMPAD_9 -> keyCode - KeyEvent.KEYCODE_NUMPAD_0
+    else -> null
+}
+
+@OptIn(UnstableApi::class)
+private fun resizeModeOf(mode: String): Int = when (mode) {
+    "zoom" -> AspectRatioFrameLayout.RESIZE_MODE_ZOOM
+    "fill" -> AspectRatioFrameLayout.RESIZE_MODE_FILL
+    else -> AspectRatioFrameLayout.RESIZE_MODE_FIT
+}
+
+private fun resizeLabelOf(mode: String): String = when (mode) {
+    "zoom" -> "Zoom"
+    "fill" -> "Strecken"
+    else -> "Anpassen"
+}
 
 @OptIn(UnstableApi::class)
 @Composable
@@ -85,6 +111,9 @@ fun VideoPlayer(
     channelNumber: Int?,
     resumeMs: Long,
     sleepMinutes: Int?,
+    resizeMode: String,
+    onCycleResize: () -> Unit,
+    onJumpToNumber: ((Int) -> Boolean)?,
     onBack: () -> Unit,
     onZap: ((Int) -> Unit)?,
     onSwapLast: (() -> Unit)?,
@@ -97,6 +126,8 @@ fun VideoPlayer(
     val currentOnSwapLast by rememberUpdatedState(onSwapLast)
     val currentMedia by rememberUpdatedState(media)
     val currentOnSaveResume by rememberUpdatedState(onSaveResume)
+    val currentOnJumpToNumber by rememberUpdatedState(onJumpToNumber)
+    val inPip = LocalInPictureInPicture.current
 
     var showMenu by remember { mutableStateOf(false) }
     // Senderlisten-Overlay (DPAD-LINKS bei Live): als MutableState, damit die einmalig
@@ -105,6 +136,8 @@ fun VideoPlayer(
     // DPAD-HOCH (Live): Info-Leiste erneut einblenden — Zähler als MutableState, damit die
     // einmalig laufende View-Factory ihn erhöhen kann und der LaunchedEffect neu anläuft.
     val infoTrigger = remember { mutableStateOf(0) }
+    // Sender-Direktwahl: eingetippte Ziffern (als MutableState, damit die View-Factory sie sieht).
+    val numberInput = remember { mutableStateOf("") }
     // Smartphone: Sichtbarkeit der Transportleiste — daran hängt die Touch-Button-Reihe.
     val isTv = LocalIsTv.current
     val controllerVisible = remember { mutableStateOf(false) }
@@ -115,14 +148,17 @@ fun VideoPlayer(
     var reconnectTrigger by remember { mutableStateOf(0) }
     var playerError by remember { mutableStateOf<String?>(null) }
 
-    val exoPlayer = remember {
-        // Cross-Protocol-Redirects erlauben: VOD-/Serien-Streams dieses Anbieters leiten
-        // von http auf https um — das folgt ExoPlayers HTTP-Quelle standardmäßig nicht.
-        val httpFactory = DefaultHttpDataSource.Factory()
-            .setUserAgent("IPTV/1.2 (Android TV)")
+    // Cross-Protocol-Redirects erlauben: VOD-/Serien-Streams dieses Anbieters leiten
+    // von http auf https um — das folgt ExoPlayers HTTP-Quelle standardmäßig nicht.
+    // Eigene Referenz, damit User-Agent/Referrer pro Stream gesetzt werden können (#EXTVLCOPT).
+    val httpFactory = remember {
+        DefaultHttpDataSource.Factory()
+            .setUserAgent(DEFAULT_USER_AGENT)
             .setAllowCrossProtocolRedirects(true)
             .setConnectTimeoutMs(15_000)
             .setReadTimeoutMs(20_000)
+    }
+    val exoPlayer = remember {
         val dataSourceFactory = DefaultDataSource.Factory(context, httpFactory)
         ExoPlayer.Builder(context)
             .setMediaSourceFactory(DefaultMediaSourceFactory(dataSourceFactory))
@@ -138,6 +174,16 @@ fun VideoPlayer(
                     .build(),
                 /* handleAudioFocus = */ true
             )
+            // Kopfhörer abgezogen / Bluetooth getrennt -> pausieren statt laut weiterspielen.
+            .setHandleAudioBecomingNoisy(true)
+            .build()
+    }
+
+    // MediaSession: Medientasten der Fernbedienung und System-Mediensteuerung. Eindeutige ID,
+    // da beim Überblenden zwischen zwei Player-Instanzen kurz beide existieren können.
+    val mediaSession = remember {
+        MediaSession.Builder(context, exoPlayer)
+            .setId("zekiptv-${System.nanoTime()}")
             .build()
     }
 
@@ -168,6 +214,9 @@ fun VideoPlayer(
     LaunchedEffect(reconnectTrigger) {
         if (reconnectTrigger > 0) {
             delay(2_000L * reconnectAttempt)
+            // Live: an den aktuellen Live-Rand springen — nach längerem Abbruch liegt die alte
+            // Position sonst außerhalb des HLS-Fensters (BehindLiveWindowException).
+            if (currentMedia.isLive) exoPlayer.seekToDefaultPosition()
             exoPlayer.prepare()
             exoPlayer.play()
         }
@@ -177,7 +226,16 @@ fun VideoPlayer(
     LaunchedEffect(media.url) {
         reconnectAttempt = 0
         playerError = null
-        exoPlayer.setMediaItem(MediaItem.fromUri(media.url))
+        httpFactory.setUserAgent(media.userAgent ?: DEFAULT_USER_AGENT)
+        httpFactory.setDefaultRequestProperties(
+            media.referrer?.let { mapOf("Referer" to it) } ?: emptyMap()
+        )
+        exoPlayer.setMediaItem(
+            MediaItem.Builder()
+                .setUri(media.url)
+                .setMediaMetadata(MediaMetadata.Builder().setTitle(media.title).build())
+                .build()
+        )
         exoPlayer.prepare()
         if (!media.isLive && resumeMs > 10_000) {
             exoPlayer.seekTo(resumeMs)
@@ -220,10 +278,15 @@ fun VideoPlayer(
     // HOME/Standby: Wiedergabe pausieren; bei Rückkehr fortsetzen. Ressourcen freigeben.
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
+        // Nur fortsetzen, wenn vor dem Verlassen auch abgespielt wurde (nicht nach manueller Pause).
+        var resumeOnStart = true
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
-                Lifecycle.Event.ON_STOP -> exoPlayer.pause()
-                Lifecycle.Event.ON_START -> exoPlayer.play()
+                Lifecycle.Event.ON_STOP -> {
+                    resumeOnStart = exoPlayer.playWhenReady
+                    exoPlayer.pause()
+                }
+                Lifecycle.Event.ON_START -> if (resumeOnStart) exoPlayer.play()
                 else -> Unit
             }
         }
@@ -231,8 +294,18 @@ fun VideoPlayer(
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
             saveVodPosition(exoPlayer, currentMedia, currentOnSaveResume)
+            mediaSession.release()
             exoPlayer.release()
         }
+    }
+
+    // Direktwahl: 2 s nach der letzten Ziffer (oder sofort bei 4 Ziffern) umschalten.
+    LaunchedEffect(numberInput.value) {
+        val input = numberInput.value
+        if (input.isEmpty()) return@LaunchedEffect
+        if (input.length < MAX_NUMBER_DIGITS) delay(2_000)
+        currentOnJumpToNumber?.invoke(input.toInt())
+        numberInput.value = ""
     }
 
     // Info-Overlay kurz einblenden: bei jedem (neuen) Medium (auch nach Zappen) und
@@ -268,6 +341,17 @@ fun VideoPlayer(
                             currentMedia.isLive && !isControllerFullyVisible && !showChannelList.value
                         ) {
                             if (event.action == KeyEvent.ACTION_DOWN) infoTrigger.value++
+                            return true
+                        }
+                        // Zifferntasten (nur Live): Sender-Direktwahl.
+                        val digit = digitOf(event.keyCode)
+                        if (digit != null && currentOnJumpToNumber != null) {
+                            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0 &&
+                                numberInput.value.length < MAX_NUMBER_DIGITS &&
+                                !(digit == 0 && numberInput.value.isEmpty()) // keine führende Null
+                            ) {
+                                numberInput.value += digit
+                            }
                             return true
                         }
                         if (event.action == KeyEvent.ACTION_DOWN) {
@@ -325,10 +409,31 @@ fun VideoPlayer(
                     playerViewRef = this
                     requestFocus()
                 }
+            },
+            update = { view ->
+                view.resizeMode = resizeModeOf(resizeMode)
+                // Bild-in-Bild: nur das Video, keine Steuerleiste.
+                view.useController = !inPip
+                if (inPip) view.hideController()
             }
         )
 
-        if (overlayVisible || reconnectAttempt > 0 || playerError != null) {
+        // Direktwahl-Anzeige oben rechts.
+        if (numberInput.value.isNotEmpty() && !inPip) {
+            Text(
+                text = numberInput.value,
+                color = Color.White,
+                style = MaterialTheme.typography.displayMedium,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(32.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Color.Black.copy(alpha = 0.6f))
+                    .padding(horizontal = 24.dp, vertical = 8.dp)
+            )
+        }
+
+        if (!inPip && (overlayVisible || reconnectAttempt > 0 || playerError != null)) {
             // Uhrzeit zum Einblende-Zeitpunkt (Overlay lebt nur wenige Sekunden).
             val timeText = remember(overlayVisible, infoTrigger.value, media.url) {
                 SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
@@ -420,7 +525,7 @@ fun VideoPlayer(
 
         // Smartphone: sichtbarer Zurück-Button oben links (verlässt die Wiedergabe) — erscheint
         // zusammen mit der Transportleiste.
-        if (!isTv && controllerVisible.value && !showChannelList.value) {
+        if (!isTv && !inPip && controllerVisible.value && !showChannelList.value) {
             PhoneBackButton(
                 onClick = onBack,
                 modifier = Modifier
@@ -433,7 +538,7 @@ fun VideoPlayer(
         // Funktionen (Programm-Info, Zappen, Wiedergabe-Menü). Erscheinen zusammen mit der
         // Transportleiste (Tippen auf das Bild). Die früher hier verankerte Senderliste
         // entfällt auf dem Handy — Senderwechsel per Zap-Buttons bzw. Zurück zur Live-Liste.
-        if (!isTv && controllerVisible.value && !showChannelList.value) {
+        if (!isTv && !inPip && controllerVisible.value && !showChannelList.value) {
             Row(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
@@ -493,10 +598,12 @@ fun VideoPlayer(
             )
         }
 
-        if (showMenu) {
+        if (showMenu && !inPip) {
             PlayerMenuDialog(
                 exoPlayer = exoPlayer,
                 sleepMinutes = sleepMinutes,
+                resizeMode = resizeMode,
+                onCycleResize = onCycleResize,
                 onZap = currentOnZap,
                 onSwapLast = currentOnSwapLast,
                 onCycleSleep = onCycleSleep,
@@ -526,6 +633,8 @@ private fun saveVodPosition(player: ExoPlayer, media: PlayingMedia, save: (Strin
 private fun PlayerMenuDialog(
     exoPlayer: ExoPlayer,
     sleepMinutes: Int?,
+    resizeMode: String,
+    onCycleResize: () -> Unit,
     onZap: ((Int) -> Unit)?,
     onSwapLast: (() -> Unit)?,
     onCycleSleep: () -> Unit,
@@ -572,6 +681,7 @@ private fun PlayerMenuDialog(
                     label = "Sleep-Timer: " + (sleepMinutes?.let { "$it min" } ?: "Aus"),
                     onClick = onCycleSleep
                 )
+                MenuRow(label = "Bildformat: ${resizeLabelOf(resizeMode)}", onClick = onCycleResize)
 
                 if (audioGroups.isNotEmpty()) {
                     Text(

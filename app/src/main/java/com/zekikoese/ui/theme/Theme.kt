@@ -7,7 +7,6 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
-import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 
@@ -67,9 +66,8 @@ fun IptvTheme(
         SideEffect {
             val window = (view.context as? Activity)?.window
             if (window != null) {
-                window.statusBarColor = colorScheme.background.toArgb()
-                // Gesten-/Navigationsleiste auf dem Handy an das Theme anpassen (TV: no-op).
-                window.navigationBarColor = colorScheme.background.toArgb()
+                // Edge-to-Edge (targetSdk 35+): Leisten sind transparent, nur die Symbolfarbe
+                // folgt dem App-Theme (TV: no-op).
                 WindowCompat.getInsetsController(window, view).apply {
                     isAppearanceLightStatusBars = !darkTheme
                     isAppearanceLightNavigationBars = !darkTheme

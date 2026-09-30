@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -28,6 +29,9 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -121,13 +125,15 @@ fun PlaylistInputDialog(
     }
 }
 
-/** Einfacher Dialog für eine einzelne Texteingabe (z. B. EPG-URL). */
+/** Einfacher Dialog für eine einzelne Texteingabe (z. B. EPG-URL oder PIN). */
 @Composable
 fun SingleTextInputDialog(
     title: String,
     label: String,
     onConfirm: (String) -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    confirmText: String = "Hinzufügen",
+    isPin: Boolean = false
 ) {
     var text by remember { mutableStateOf("") }
     val focusRequester = remember { FocusRequester() }
@@ -149,9 +155,14 @@ fun SingleTextInputDialog(
                 )
                 OutlinedTextField(
                     value = text,
-                    onValueChange = { text = it },
+                    // PIN: nur Ziffern, maskiert, Zifferntastatur.
+                    onValueChange = { text = if (isPin) it.filter(Char::isDigit).take(8) else it },
                     label = { Text(label) },
                     singleLine = true,
+                    visualTransformation = if (isPin) PasswordVisualTransformation() else VisualTransformation.None,
+                    keyboardOptions = if (isPin) {
+                        KeyboardOptions(keyboardType = KeyboardType.NumberPassword)
+                    } else KeyboardOptions.Default,
                     modifier = Modifier.fillMaxWidth().focusRequester(focusRequester)
                 )
                 Spacer(Modifier.height(24.dp))
@@ -165,7 +176,7 @@ fun SingleTextInputDialog(
                         borderColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
                     )
                     TvButton(
-                        text = "Hinzufügen",
+                        text = confirmText,
                         onClick = { onConfirm(text); onDismiss() }
                     )
                 }
@@ -210,11 +221,16 @@ fun ChannelActionsDialog(
     }
 }
 
-/** Tagesprogramm eines Senders aus den geladenen EPG-Daten. */
+/**
+ * Tagesprogramm eines Senders aus den geladenen EPG-Daten. Hat der Sender ein Archiv
+ * ([catchupFrom] = früheste abrufbare Startzeit), sind vergangene Sendungen per OK abspielbar (⏪).
+ */
 @Composable
 fun EpgDayDialog(
     channelName: String,
     programmes: List<EpgProgramme>,
+    catchupFrom: Long? = null,
+    onPlayCatchup: (EpgProgramme) -> Unit = {},
     onDismiss: () -> Unit
 ) {
     val timeFormat = remember { SimpleDateFormat("HH:mm", Locale.getDefault()) }
@@ -235,16 +251,27 @@ fun EpgDayDialog(
                 LazyColumn(modifier = Modifier.heightIn(max = if (isTv) 560.dp else 440.dp)) {
                     items(programmes) { programme ->
                         val isNow = now >= programme.startMs && now < programme.stopMs
+                        val replayable = catchupFrom != null &&
+                            programme.stopMs <= now && programme.startMs >= catchupFrom
                         DialogRow(
-                            label = "%s – %s   %s".format(
+                            label = "%s%s – %s   %s".format(
+                                if (replayable) "⏪ " else "",
                                 timeFormat.format(Date(programme.startMs)),
                                 timeFormat.format(Date(programme.stopMs)),
                                 programme.title
                             ),
                             highlighted = isNow,
-                            onClick = {}
+                            onClick = { if (replayable) onPlayCatchup(programme) }
                         )
                     }
+                }
+                if (catchupFrom != null) {
+                    Text(
+                        text = "⏪ = vergangene Sendung aus dem Archiv abspielen",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                    )
                 }
                 DialogRow("Schließen") { onDismiss() }
             }

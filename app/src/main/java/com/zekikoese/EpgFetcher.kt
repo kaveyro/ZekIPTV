@@ -33,7 +33,7 @@ object EpgFetcher {
                     parsed.nameToId.forEach { (name, id) -> nameToId.putIfAbsent(name, id) }
                 }
             }.onFailure {
-                Log.e("EpgFetcher", "Fehler beim Laden von $source", it)
+                Log.e("EpgFetcher", "Fehler beim Laden von ${Http.redact(source)}", it)
                 failures++
             }
         }

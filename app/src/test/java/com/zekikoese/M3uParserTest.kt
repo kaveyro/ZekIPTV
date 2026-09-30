@@ -117,4 +117,39 @@ class M3uParserTest {
         assertNull(channels[0].logo)
         assertNull(channels[0].group)
     }
+
+    @Test
+    fun `reads vlc options and extgrp until the url line`() {
+        val channels = parse(
+            """
+            #EXTM3U
+            #EXTINF:-1 tvg-id="a",Mit Headern
+            #EXTGRP:Sport
+            #EXTVLCOPT:http-user-agent=Mozilla/5.0 Test
+            #EXTVLCOPT:http-referrer=https://example.com/
+            http://example.com/a.m3u8
+            #EXTINF:-1 group-title="News",Ohne Header
+            http://example.com/b.m3u8
+            """.trimIndent()
+        )
+        assertEquals("Sport", channels[0].group)
+        assertEquals("Mozilla/5.0 Test", channels[0].userAgent)
+        assertEquals("https://example.com/", channels[0].referrer)
+        // Optionen gelten nur für den eigenen Eintrag.
+        assertEquals("News", channels[1].group)
+        assertNull(channels[1].userAgent)
+        assertNull(channels[1].referrer)
+    }
+
+    @Test
+    fun `group title wins over extgrp`() {
+        val channels = parse(
+            """
+            #EXTINF:-1 group-title="Filme",Kanal
+            #EXTGRP:Andere
+            http://example.com/a.m3u8
+            """.trimIndent()
+        )
+        assertEquals("Filme", channels[0].group)
+    }
 }

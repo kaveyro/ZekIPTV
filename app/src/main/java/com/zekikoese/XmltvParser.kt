@@ -32,14 +32,20 @@ data class XmltvResult(
 fun normalizeChannelName(raw: String): String {
     var s = raw.lowercase().trim()
     // Führendes Präfix wie "de:", "tr:", "sd:", "vip:" entfernen.
-    s = s.replace(Regex("^[a-z]{2,4}\\s*:\\s*"), "")
+    s = s.replace(PREFIX_REGEX, "")
     // Qualitäts-Tags als eigenständige Wörter entfernen.
-    s = s.replace(Regex("\\b(sd|hd|fhd|uhd|4k|8k|hevc|h265|raw)\\b"), " ")
+    s = s.replace(QUALITY_TAG_REGEX, " ")
     // Umlaute/Sonderbuchstaben transliterieren (ä->a, ç->c, ...); ı und ß manuell.
     s = s.replace("ı", "i").replace("ß", "ss")
-    s = Normalizer.normalize(s, Normalizer.Form.NFD).replace(Regex("\\p{Mn}+"), "")
-    return s.replace(Regex("[^a-z0-9]+"), "")
+    s = Normalizer.normalize(s, Normalizer.Form.NFD).replace(COMBINING_MARKS_REGEX, "")
+    return s.replace(NON_ALNUM_REGEX, "")
 }
+
+// Einmal kompiliert: normalizeChannelName läuft für jeden Sender und jeden XMLTV-display-name.
+private val PREFIX_REGEX = Regex("^[a-z]{2,4}\\s*:\\s*")
+private val QUALITY_TAG_REGEX = Regex("\\b(sd|hd|fhd|uhd|4k|8k|hevc|h265|raw)\\b")
+private val COMBINING_MARKS_REGEX = Regex("\\p{Mn}+")
+private val NON_ALNUM_REGEX = Regex("[^a-z0-9]+")
 
 /**
  * Streaming-Parser für XMLTV-EPG-Dateien.
@@ -51,7 +57,7 @@ fun normalizeChannelName(raw: String): String {
  */
 class XmltvParser(
     private val nowMs: Long = System.currentTimeMillis(),
-    private val pastWindowMs: Long = 6L * 60 * 60 * 1000,     // 6 h zurück
+    private val pastWindowMs: Long = 24L * 60 * 60 * 1000,    // 24 h zurück (Catch-up)
     private val futureWindowMs: Long = 36L * 60 * 60 * 1000   // 36 h voraus
 ) {
 
@@ -95,23 +101,26 @@ class XmltvParser(
 
                     "programme" -> {
                         val channelId = parser.getAttributeValue(null, "channel")?.lowercase()
-                        val start = parseTime(parser.getAttributeValue(null, "start"))
-                        var stop = parseTime(parser.getAttributeValue(null, "stop"))
+                        // Kanal zuerst prüfen: Zeiten nur für relevante Sender parsen
+                        // (der Großteil einer großen XMLTV-Datei betrifft fremde Sender).
+                        val wantedChannel = channelId != null &&
+                            (channelId in wantedChannelIds || channelId in resolvedIds)
+                        val start = if (wantedChannel) parseTime(parser.getAttributeValue(null, "start")) else null
+                        var stop = if (start != null) parseTime(parser.getAttributeValue(null, "stop")) else null
 
                         // Falls Stop-Zeit fehlt: temporär 4h annehmen, wird später korrigiert.
                         if (start != null && stop == null) {
                             stop = start + 4 * 60 * 60 * 1000
                         }
 
-                        val relevant = channelId != null &&
-                            (channelId in wantedChannelIds || channelId in resolvedIds) &&
+                        val relevant = wantedChannel &&
                             start != null && stop != null &&
                             stop > nowMs - pastWindowMs && start < nowMs + futureWindowMs
                         if (relevant) {
                             val title = readTitle(parser)
                             if (title != null) {
-                                programmes.getOrPut(channelId!!) { mutableListOf() }
-                                    .add(EpgProgramme(channelId, start!!, stop!!, title))
+                                programmes.getOrPut(channelId) { mutableListOf() }
+                                    .add(EpgProgramme(channelId, start, stop, title))
                             }
                         } else {
                             skipElement(parser)
@@ -178,6 +187,12 @@ class XmltvParser(
         return title
     }
 
+    // Pro Parser-Instanz wiederverwendet (statt pro Sendung neu erzeugt); eine Instanz
+    // wird nur von einem Thread benutzt, daher ist SimpleDateFormat hier unkritisch.
+    private val zonedFormat = SimpleDateFormat("yyyyMMddHHmmss Z", Locale.US)
+    private val utcFormat = SimpleDateFormat("yyyyMMddHHmmss", Locale.US)
+        .apply { timeZone = TimeZone.getTimeZone("UTC") }
+
     /** XMLTV-Zeitformat: "yyyyMMddHHmmss [+-]HHMM" (Zeitzone optional, dann UTC angenommen). */
     private fun parseTime(raw: String?): Long? {
         if (raw == null || raw.length < 14) return null
@@ -187,11 +202,9 @@ class XmltvParser(
                 val datePart = raw.substring(0, 14)
                 val tzPart = raw.substring(14).trim().replace(":", "")
                 val normalized = "$datePart $tzPart"
-                SimpleDateFormat("yyyyMMddHHmmss Z", Locale.US).parse(normalized)!!.time
+                zonedFormat.parse(normalized)!!.time
             } else {
-                SimpleDateFormat("yyyyMMddHHmmss", Locale.US)
-                    .apply { timeZone = TimeZone.getTimeZone("UTC") }
-                    .parse(raw)!!.time
+                utcFormat.parse(raw)!!.time
             }
         }.getOrNull()
     }

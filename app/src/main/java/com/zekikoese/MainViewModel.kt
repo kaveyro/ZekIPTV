@@ -1,6 +1,7 @@
 package com.zekikoese
 
 import android.app.Application
+import android.net.Uri
 import androidx.compose.runtime.State
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -60,6 +61,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val epgSources = mutableStateOf<Set<String>>(emptySet())
     val epgInfo = mutableStateOf("")
     val autoplayLast = mutableStateOf(false)
+    val resizeMode = mutableStateOf("fit") // fit | zoom | fill (Bildformat im Player)
+
+    // Jugendschutz: PIN schützt ausgeblendete Kategorien und den Backup-Import.
+    val parentalPin = mutableStateOf("")
+    val parentalUnlocked = mutableStateOf(false) // gilt bis zum App-Neustart
+    val parentalLocked: Boolean get() = parentalPin.value.isNotEmpty() && !parentalUnlocked.value
 
     // Xtream (Filme/Serien) — verfügbar, wenn die Playlist-URL eine get.php-URL ist.
     val xtreamAvailable = mutableStateOf(false)
@@ -73,6 +80,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val selectedSeries = mutableStateOf<SeriesItem?>(null)
     val seriesEpisodes = mutableStateOf<List<SeriesEpisode>>(emptyList())
     val contentInfo = mutableStateOf("") // Lade-/Fehlerstatus für Filme/Serien
+
+    // Xtream-Konto (Ablaufdatum, Verbindungen) und Catch-up-Archiv (Stream-ID -> Tage).
+    val accountInfo = mutableStateOf<XtreamAccountInfo?>(null)
+    val accountInfoError = mutableStateOf("")
+    private val archiveDays = mutableStateOf<Map<String, Int>>(emptyMap())
+    private var archiveJob: Job? = null
 
     // VOD-Detail-Seite
     val selectedVod = mutableStateOf<VodItem?>(null)
@@ -97,9 +110,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val sleepTimerMinutes = mutableStateOf<Int?>(null)
     private var sleepJob: Job? = null
 
+    // Laufende Ladevorgänge — verhindern parallele Doppel-Downloads.
+    private var epgJob: Job? = null
+    private var vodJob: Job? = null
+    private var seriesJob: Job? = null
+
     // EPG: EPG-Kanal-ID (kleingeschrieben) -> Sendungen; Namens-Fallback über epgNameToId.
     private var epgData: Map<String, List<EpgProgramme>> = emptyMap()
     private var epgNameToId: Map<String, String> = emptyMap()
+
+    // Kanal -> aufgelöste EPG-ID (null = kein EPG). Erspart die Namens-Normalisierung bei jeder
+    // Recomposition; wird bei jedem neuen EPG-Stand geleert. Nur auf dem Main-Thread genutzt.
+    private val epgIdCache = HashMap<Channel, String?>()
 
     // Minuten-Ticker: UI liest diesen State, damit "Jetzt läuft"/Fortschritt aktuell bleibt.
     val epgTick = mutableStateOf(0L)
@@ -231,13 +253,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Zuletzt gesehene Sender (gegen die geladene Playlist aufgelöst). */
     val recentChannels: State<List<Channel>> = derivedStateOf {
         val byUrl = allChannels.value.associateBy { it.url }
-        recentChannelUrls.value.mapNotNull { byUrl[it] }
+        recentChannelUrls.value.mapNotNull { byUrl[it] }.filterNot(::hiddenByParental)
     }
 
     /** Favorisierte Sender (für die Home-Reihe; VOD/Serien-Favoriten laufen über die Tabs). */
     val favoriteChannels: State<List<Channel>> = derivedStateOf {
         allChannels.value.filter { it.url in favorites.value }.distinctBy { it.url }
+            .filterNot(::hiddenByParental)
     }
+
+    /** Mit Jugendschutz-PIN erscheinen Sender ausgeblendeter Kategorien auch nicht auf Home. */
+    private fun hiddenByParental(channel: Channel): Boolean =
+        parentalPin.value.isNotEmpty() && channel.group != null && channel.group in hiddenGroups.value
 
     /** Angefangene Filme/Episoden: Resume-Position vorhanden + Metadaten bekannt. */
     val continueWatching: State<List<ContinueWatchingItem>> = derivedStateOf {
@@ -264,6 +291,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         else allChannels.value
             .filter { it.group == null || it.group !in hiddenGroups.value }
             .filter { it.name.contains(query, ignoreCase = true) }
+            // Derselbe Sender steht oft in mehreren Gruppen — sonst doppelte LazyColumn-Keys.
+            .distinctBy { it.url }
             .take(50)
     }
 
@@ -285,6 +314,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             url.value = repository.urlFlow.first()
             themeMode.value = repository.themeFlow.first()
             uiModeOverride.value = repository.uiModeFlow.first()
+            resizeMode.value = repository.resizeModeFlow.first()
+            parentalPin.value = repository.parentalPinFlow.first()
             epgSources.value = repository.epgSourcesFlow.first()
             autoplayLast.value = repository.autoplayFlow.first()
             resumePositions.value = repository.resumePositionsFlow.first()
@@ -299,7 +330,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
             setupXtream(url.value, autoAddEpg = false)
 
-            val saved = repository.channelsFlow.first()
+            val saved = repository.loadChannels()
             if (saved.isNotEmpty()) {
                 allChannels.value = saved
                 uiState.value = PlaylistUiState.Success
@@ -309,8 +340,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             // EPG: erst aus dem Datei-Cache, nur bei veraltetem/fehlendem Cache neu laden.
             val cached = repository.loadEpgCache(EPG_CACHE_MAX_AGE_MS)
             if (cached != null) {
-                epgData = cached.first
-                epgNameToId = cached.second
+                setEpg(cached.first, cached.second)
                 epgTick.value = System.currentTimeMillis()
                 epgInfo.value = "EPG aus Cache (${cached.first.values.sumOf { it.size }} Sendungen)."
             } else if (saved.isNotEmpty()) {
@@ -384,6 +414,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Blendet eine Live-Kategorie aus bzw. ein; aktive Filter auf die Kategorie werden gelöst. */
     fun toggleHiddenGroup(group: String) {
+        if (parentalLocked) return
         if (group !in hiddenGroups.value) {
             if (selectedGroup.value == group) selectedGroup.value = null
             if (playerOverlayGroup.value == group) playerOverlayGroup.value = null
@@ -411,6 +442,33 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun setUiMode(mode: String) {
         uiModeOverride.value = mode
         viewModelScope.launch { repository.saveUiMode(mode) }
+    }
+
+    /** Entsperrt die Jugendschutz-Einstellungen; false bei falscher PIN. */
+    fun unlockParental(pin: String): Boolean {
+        val ok = pin == parentalPin.value
+        if (ok) parentalUnlocked.value = true
+        return ok
+    }
+
+    /** Setzt (oder entfernt mit leerem Wert) die Jugendschutz-PIN. Nur im entsperrten Zustand. */
+    fun setParentalPin(pin: String) {
+        if (parentalLocked) return
+        val trimmed = pin.trim()
+        parentalPin.value = trimmed
+        parentalUnlocked.value = trimmed.isNotEmpty() // wer die PIN setzt, bleibt entsperrt
+        viewModelScope.launch { repository.saveParentalPin(trimmed) }
+    }
+
+    /** Bildformat durchschalten: Anpassen -> Zoom -> Strecken -> Anpassen. */
+    fun cycleResizeMode() {
+        val next = when (resizeMode.value) {
+            "fit" -> "zoom"
+            "zoom" -> "fill"
+            else -> "fit"
+        }
+        resizeMode.value = next
+        viewModelScope.launch { repository.saveResizeMode(next) }
     }
 
     // ---------- Navigation / Xtream-Inhalte ----------
@@ -441,20 +499,75 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val account = detectXtream(playlistUrl)
         xtream = account?.let { XtreamApi(it) }
         xtreamAvailable.value = xtream != null
+        accountInfo.value = null
+        archiveDays.value = emptyMap()
+        archiveJob?.cancel()
+        archiveJob = null
+        // Archiv-Info (get_live_streams, oft mehrere MB) erst beim Öffnen des Tagesprogramms laden.
+        if (xtream != null) refreshAccountInfo()
         // Ohne Xtream gibt es keine Filme/Serien-Bereiche mehr — ggf. dorthin navigierte Nutzer umleiten.
         if (xtream == null && currentDestination.value in setOf(NavDestination.MOVIES, NavDestination.SERIES)) {
             currentDestination.value = NavDestination.HOME
         }
         // Anbieter-EPG automatisch als Quelle ergänzen: dessen Kanal-IDs matchen die Playlist exakt.
         if (autoAddEpg) {
-            xtream?.epgUrl()?.let { epg -> if (epg !in epgSources.value) addEpgSource(epg) }
+            // Ohne eigenen Refresh: der Aufrufer (loadPlaylist) lädt das EPG direkt danach.
+            xtream?.epgUrl()?.let { epg -> if (epg !in epgSources.value) addEpgSource(epg, refresh = false) }
         }
+    }
+
+    /** Konto-Status beim Anbieter neu abfragen (Einstellungen). */
+    fun refreshAccountInfo() {
+        val api = xtream ?: return
+        viewModelScope.launch {
+            runCatching { withContext(Dispatchers.IO) { api.getAccountInfo() } }.fold(
+                onSuccess = {
+                    accountInfo.value = it
+                    accountInfoError.value = ""
+                },
+                onFailure = { accountInfoError.value = "Konto-Info nicht verfügbar: ${it.message}" }
+            )
+        }
+    }
+
+    private fun loadArchiveInfo() {
+        val api = xtream ?: return
+        if (archiveJob != null) return // einmal pro Playlist
+        archiveJob = viewModelScope.launch {
+            runCatching { withContext(Dispatchers.IO) { api.getLiveArchiveDays() } }
+                .onSuccess { archiveDays.value = it }
+                .onFailure { archiveJob = null } // beim nächsten Öffnen erneut versuchen
+        }
+    }
+
+    /** Früheste abspielbare Startzeit für Catch-up bei diesem Sender; null = kein Archiv. */
+    fun catchupFrom(channel: Channel): Long? {
+        if (xtream == null) return null
+        val id = xtreamStreamIdOf(channel.url) ?: return null
+        val days = archiveDays.value[id] ?: return null
+        return System.currentTimeMillis() - days * 24L * 60 * 60 * 1000
+    }
+
+    /** Spielt eine vergangene Sendung aus dem Anbieter-Archiv ab. */
+    fun playCatchup(channel: Channel, programme: EpgProgramme) {
+        val api = xtream ?: return
+        val id = xtreamStreamIdOf(channel.url) ?: return
+        val url = api.timeshiftUrl(id, programme.startMs, programme.stopMs, accountInfo.value?.serverTimezone)
+        epgChannel.value = null
+        playingMedia.value = PlayingMedia(
+            url = url,
+            title = "${channel.name}: ${programme.title}",
+            isLive = false,
+            userAgent = channel.userAgent,
+            referrer = channel.referrer
+        )
     }
 
     private fun loadVod() {
         val api = xtream ?: return
+        if (vodJob?.isActive == true) return
         contentInfo.value = "Filme werden geladen…"
-        viewModelScope.launch {
+        vodJob = viewModelScope.launch {
             runCatching {
                 withContext(Dispatchers.IO) { api.getVodCategories() to api.getVodStreams() }
             }.fold(
@@ -470,8 +583,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun loadSeries() {
         val api = xtream ?: return
+        if (seriesJob?.isActive == true) return
         contentInfo.value = "Serien werden geladen…"
-        viewModelScope.launch {
+        seriesJob = viewModelScope.launch {
             runCatching {
                 withContext(Dispatchers.IO) { api.getSeriesCategories() to api.getSeries() }
             }.fold(
@@ -563,6 +677,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun stopPlayback() {
+        // Sleep-Timer gilt nur für die laufende Wiedergabe — sonst beendet er später eine neue.
+        cancelSleepTimer()
         selectedChannel.value = null
         playingMedia.value = null
         // Fokus dorthin zurückgeben, wo die Wiedergabe gestartet wurde.
@@ -578,11 +694,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         resumePositions.value = resumePositions.value.toMutableMap().apply {
             if (positionMs > 0) put(url, positionMs) else remove(url)
         }
-        viewModelScope.launch {
-            repository.saveResumePosition(url, positionMs)
-            // Gesamtdauer nachtragen — erst der Player kennt sie (für den Fortschrittsbalken).
-            repository.updateWatchDuration(url, durationMs)
-        }
+        // Gesamtdauer wird mit nachgetragen — erst der Player kennt sie (für den Fortschrittsbalken).
+        viewModelScope.launch { repository.saveProgress(url, positionMs, durationMs) }
     }
 
     fun resumeFor(url: String): Long = resumePositions.value[url] ?: 0L
@@ -604,10 +717,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         sleepJob = next?.let { minutes ->
             viewModelScope.launch {
                 delay(minutes * 60_000L)
-                sleepTimerMinutes.value = null
+                sleepJob = null
                 stopPlayback()
             }
         }
+    }
+
+    private fun cancelSleepTimer() {
+        sleepJob?.cancel()
+        sleepJob = null
+        sleepTimerMinutes.value = null
     }
 
     // ---------- Playlist-Manager ----------
@@ -636,13 +755,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---------- EPG ----------
 
-    fun addEpgSource(source: String) {
+    fun addEpgSource(source: String, refresh: Boolean = true) {
         val trimmed = source.trim()
         if (trimmed.isEmpty() || trimmed in epgSources.value) return
         val updated = epgSources.value + trimmed
         epgSources.value = updated
         viewModelScope.launch { repository.saveEpgSources(updated) }
-        refreshEpg()
+        if (refresh) refreshEpg()
     }
 
     fun removeEpgSource(source: String) {
@@ -663,10 +782,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         epgInfo.value = "EPG wird geladen…"
-        viewModelScope.launch {
+        // Nur ein EPG-Abruf gleichzeitig: ein neuerer ersetzt den laufenden (dessen Ergebnis
+        // wird nach dem Abbruch verworfen und kann den neueren Stand nicht überschreiben).
+        epgJob?.cancel()
+        epgJob = viewModelScope.launch {
             val result = withContext(Dispatchers.IO) { EpgFetcher.fetch(channels, sources) }
-            epgData = result.programmes
-            epgNameToId = result.nameToId
+            setEpg(result.programmes, result.nameToId)
             epgTick.value = System.currentTimeMillis()
             repository.saveEpgCache(result.programmes, result.nameToId)
 
@@ -687,30 +808,54 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun clearEpgCache() {
         viewModelScope.launch {
             repository.clearEpgCache()
-            epgData = emptyMap()
-            epgNameToId = emptyMap()
+            setEpg(emptyMap(), emptyMap())
             epgTick.value = System.currentTimeMillis()
             epgInfo.value = "EPG-Cache wurde gelöscht."
         }
+    }
+
+    private fun setEpg(programmes: Map<String, List<EpgProgramme>>, nameToId: Map<String, String>) {
+        epgData = programmes
+        epgNameToId = nameToId
+        epgIdCache.clear()
+    }
+
+    /** EPG-ID eines Kanals (per tvg-id, sonst per normalisiertem Sendernamen), gecacht. */
+    private fun epgIdFor(channel: Channel): String? = epgIdCache.getOrPut(channel) {
+        channel.tvgId?.lowercase()?.takeIf { it in epgData }
+            ?: epgNameToId[normalizeChannelName(channel.name)]
     }
 
     /** Jetzt/Gleich + Fortschritt für einen Kanal (per tvg-id, sonst per Sendername). */
     fun epgFor(channel: Channel): EpgNowNext {
         val now = epgTick.value // State-Read: Recomposition bei jedem Ticker-Update
         if (now == 0L || epgData.isEmpty()) return EMPTY_EPG
-        val id = channel.tvgId?.lowercase()?.takeIf { it in epgData }
-            ?: epgNameToId[normalizeChannelName(channel.name)]
-            ?: return EMPTY_EPG
+        val id = epgIdFor(channel) ?: return EMPTY_EPG
         val programmes = epgData[id] ?: return EMPTY_EPG
-        val index = programmes.indexOfFirst { now >= it.startMs && now < it.stopMs }
-        if (index < 0) {
-            val upcoming = programmes.firstOrNull { it.startMs > now }
-            return EpgNowNext(null, upcoming?.title, null)
-        }
-        val current = programmes[index]
+        // Sendungen sind nach Start sortiert: letzte Sendung mit Start <= jetzt per Binärsuche.
+        val index = lastStartingAtOrBefore(programmes, now)
+        val current = programmes.getOrNull(index)?.takeIf { now < it.stopMs }
+            ?: return EpgNowNext(null, programmes.getOrNull(index + 1)?.title, null)
         val progress = ((now - current.startMs).toFloat() / (current.stopMs - current.startMs))
             .coerceIn(0f, 1f)
         return EpgNowNext(current.title, programmes.getOrNull(index + 1)?.title, progress)
+    }
+
+    /** Index der letzten Sendung mit startMs <= [now]; -1, wenn alle später beginnen. */
+    private fun lastStartingAtOrBefore(programmes: List<EpgProgramme>, now: Long): Int {
+        var low = 0
+        var high = programmes.lastIndex
+        var result = -1
+        while (low <= high) {
+            val mid = (low + high) ushr 1
+            if (programmes[mid].startMs <= now) {
+                result = mid
+                low = mid + 1
+            } else {
+                high = mid - 1
+            }
+        }
+        return result
     }
 
     // ---------- Playlist laden ----------
@@ -725,7 +870,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             val result = withContext(Dispatchers.IO) {
                 runCatching {
-                    Http.openStream(target).use { M3uParser().parse(it) }
+                    // GZIP-Playlists transparent entpacken (erkannt an den Magic-Bytes).
+                    Http.maybeGunzip(Http.openStream(target)).use { M3uParser().parse(it) }
                 }
             }
             result.fold(
@@ -771,6 +917,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** Direktwahl per Zifferntasten: Nummer = Position in der aktuellen Senderliste (1-basiert). */
+    fun jumpToChannelNumber(number: Int): Boolean {
+        val channel = visibleChannels.value.getOrNull(number - 1) ?: return false
+        selectChannel(channel)
+        return true
+    }
+
     /** Springt zum zuvor gesehenen Sender zurück (klassische "letzter Sender"-Taste). */
     fun swapToPreviousChannel() {
         previousChannel?.let(::selectChannel)
@@ -814,6 +967,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun openEpgFor(channel: Channel) {
         epgChannel.value = channel
+        loadArchiveInfo()
     }
 
     fun closeEpg() {
@@ -822,31 +976,35 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Alle geladenen Sendungen eines Senders (für die Tagesprogramm-Ansicht). */
     fun programmesFor(channel: Channel): List<EpgProgramme> {
-        val id = channel.tvgId?.lowercase()?.takeIf { it in epgData }
-            ?: epgNameToId[normalizeChannelName(channel.name)]
-            ?: return emptyList()
+        val id = epgIdFor(channel) ?: return emptyList()
         return epgData[id] ?: emptyList()
     }
 
     // ---------- Backup ----------
 
-    fun exportBackup() {
+    fun exportBackup(target: Uri? = null) {
         viewModelScope.launch {
-            runCatching { repository.exportBackup() }.fold(
+            runCatching { repository.exportBackup(target) }.fold(
                 onSuccess = { backupInfo.value = "Backup gespeichert: $it" },
                 onFailure = { backupInfo.value = "Backup fehlgeschlagen: ${it.message}" }
             )
         }
     }
 
-    fun importBackup() {
+    fun importBackup(source: Uri? = null) {
+        // Import würde ausgeblendete Kategorien überschreiben — nur ohne aktive Sperre.
+        if (parentalLocked) {
+            backupInfo.value = "Import gesperrt — zuerst die Jugendschutz-PIN eingeben."
+            return
+        }
         viewModelScope.launch {
-            runCatching { repository.importBackup() }.fold(
+            runCatching { repository.importBackup(source) }.fold(
                 onSuccess = {
                     // Zustände neu einlesen und Playlist mit den importierten Daten laden.
                     url.value = repository.urlFlow.first()
                     themeMode.value = repository.themeFlow.first()
                     uiModeOverride.value = repository.uiModeFlow.first()
+                    resizeMode.value = repository.resizeModeFlow.first()
                     epgSources.value = repository.epgSourcesFlow.first()
                     autoplayLast.value = repository.autoplayFlow.first()
                     playlists.value = repository.playlistsFlow.first()

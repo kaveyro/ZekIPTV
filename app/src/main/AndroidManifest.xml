@@ -13,8 +13,11 @@
         android:name="android.hardware.touchscreen"
         android:required="false" />
 
+    <!-- allowBackup=false: Playlist-URLs enthalten Xtream-Zugangsdaten; Sicherung läuft über
+         das eigene Backup in den Einstellungen. -->
     <application
-        android:allowBackup="true"
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
         android:banner="@drawable/tv_banner"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
@@ -27,8 +30,9 @@
         <activity
             android:name=".MainActivity"
             android:banner="@drawable/tv_banner"
-            android:configChanges="orientation|screenSize|keyboardHidden"
-            android:exported="true">
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode"
+            android:exported="true"
+            android:supportsPictureInPicture="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <!-- Startet auf Handy/Tablet ... -->

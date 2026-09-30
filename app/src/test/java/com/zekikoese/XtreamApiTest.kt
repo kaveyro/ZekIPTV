@@ -106,4 +106,86 @@ class XtreamApiTest {
             api.episodeStreamUrl(SeriesEpisode("101", "Ep", 1, 1, "mp4"))
         )
     }
+
+    @Test
+    fun `decodes percent encoded credentials without double encoding`() {
+        val account = detectXtream("http://host.tv/get.php?username=max%40mail.de&password=a%26b%20c&type=m3u")
+        assertEquals("max@mail.de", account?.username)
+        assertEquals("a&b c", account?.password)
+
+        val api = XtreamApi(account!!) { "" }
+        assertEquals("http://host.tv/xmltv.php?username=max%40mail.de&password=a%26b+c", api.epgUrl())
+        assertEquals(
+            "http://host.tv/movie/max%40mail.de/a%26b%20c/42.mp4",
+            api.vodStreamUrl(VodItem(42, "Film", null, null, "mp4"))
+        )
+    }
+
+    @Test
+    fun `drops duplicate catalog entries`() {
+        val json = """[
+            {"stream_id":42,"name":"Film","category_id":"1"},
+            {"stream_id":42,"name":"Film","category_id":"2"}
+        ]"""
+        val api = XtreamApi(account) { json }
+        assertEquals(1, api.getVodStreams().size)
+    }
+
+    @Test
+    fun `redacts credentials in urls`() {
+        assertEquals(
+            "http://host.tv/xmltv.php?username=***&password=***",
+            Http.redact("http://host.tv/xmltv.php?username=max&password=geheim")
+        )
+    }
+
+    @Test
+    fun `parses account info`() {
+        val json = """{
+            "user_info": {"status":"Active","exp_date":"1767225600","max_connections":"2",
+                          "active_cons":1,"is_trial":"0"},
+            "server_info": {"timezone":"Europe/Berlin"}
+        }"""
+        val info = XtreamApi(account) { json }.getAccountInfo()
+        assertEquals("Active", info.status)
+        assertEquals(1_767_225_600_000L, info.expiresAtMs)
+        assertEquals(2, info.maxConnections)
+        assertEquals(1, info.activeConnections)
+        assertEquals(false, info.isTrial)
+        assertEquals("Europe/Berlin", info.serverTimezone)
+    }
+
+    @Test
+    fun `unlimited account has no expiry`() {
+        val info = XtreamApi(account) { """{"user_info":{"status":"Active","exp_date":null}}""" }.getAccountInfo()
+        assertNull(info.expiresAtMs)
+    }
+
+    @Test
+    fun `reads archive days of live streams`() {
+        val json = """[
+            {"stream_id":1,"tv_archive":1,"tv_archive_duration":"7"},
+            {"stream_id":2,"tv_archive":"0","tv_archive_duration":"7"},
+            {"stream_id":3,"tv_archive":"1","tv_archive_duration":3}
+        ]"""
+        assertEquals(mapOf("1" to 7, "3" to 3), XtreamApi(account) { json }.getLiveArchiveDays())
+    }
+
+    @Test
+    fun `extracts stream id from live urls`() {
+        assertEquals("1234", xtreamStreamIdOf("http://host.tv/live/u/p/1234.ts"))
+        assertEquals("1234", xtreamStreamIdOf("http://host.tv/u/p/1234"))
+        assertEquals("55", xtreamStreamIdOf("http://host.tv/live/u/p/55.m3u8"))
+        assertNull(xtreamStreamIdOf("http://host.tv/hls/kanal.m3u8"))
+        assertNull(xtreamStreamIdOf("kein url"))
+    }
+
+    @Test
+    fun `builds timeshift url in server timezone`() {
+        val api = XtreamApi(account) { "" }
+        // 2026-01-10 18:00 UTC = 19:00 in Berlin, Dauer 45 min (aufgerundet)
+        val start = 1_768_068_000_000L
+        val url = api.timeshiftUrl("99", start, start + 44 * 60_000 + 1, "Europe/Berlin")
+        assertEquals("http://host.tv:80/timeshift/user1/pass1/45/2026-01-10:19-00/99.ts", url)
+    }
 }

@@ -4,6 +4,7 @@ import android.app.UiModeManager
 import android.content.Context
 import android.content.pm.PackageManager
 import android.content.res.Configuration
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.staticCompositionLocalOf
 
 /**
@@ -23,3 +24,6 @@ fun Context.isTvDevice(): Boolean {
  * Default true: Ohne Provider verhält sich alles wie bisher auf dem TV (fail-safe).
  */
 val LocalIsTv = staticCompositionLocalOf { true }
+
+/** True, solange die Activity im Bild-in-Bild-Modus läuft (nur Smartphone). */
+val LocalInPictureInPicture = compositionLocalOf { false }

@@ -30,14 +30,14 @@ class RefreshWorker(
 
         // Playlist aktualisieren (Fehler tolerieren — alter Stand bleibt dann erhalten).
         val channels = runCatching {
-            Http.openStream(url).use { M3uParser().parse(it) }
+            Http.maybeGunzip(Http.openStream(url)).use { M3uParser().parse(it) }
         }.getOrNull()
         if (channels != null && channels.isNotEmpty()) {
             repository.saveChannels(channels)
         }
 
         // EPG aktualisieren.
-        val epgChannels = channels ?: repository.channelsFlow.first()
+        val epgChannels = channels ?: repository.loadChannels()
         val sources = repository.epgSourcesFlow.first()
         if (epgChannels.isNotEmpty() && sources.isNotEmpty()) {
             runCatching {

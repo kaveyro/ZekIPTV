@@ -2,7 +2,6 @@ import java.util.Properties
 
 plugins {
     id("com.android.application")
-    id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
@@ -19,9 +18,9 @@ android {
     defaultConfig {
         applicationId = "com.zekikoese"
         minSdk = 24
-        targetSdk = 34
-        versionCode = 10
-        versionName = "1.7.1"
+        targetSdk = 36
+        versionCode = 11
+        versionName = "1.8.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -57,9 +56,6 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions {
-        jvmTarget = "17"
-    }
     buildFeatures {
         compose = true
     }
@@ -70,10 +66,17 @@ android {
     }
 }
 
+kotlin {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+    }
+}
+
 dependencies {
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
+    implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.activity.compose)
     implementation(platform(libs.androidx.compose.bom))
@@ -81,13 +84,16 @@ dependencies {
     implementation(libs.androidx.compose.ui.graphics)
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
-    // Kein material-icons-extended: der einzige genutzte Icon (Star) ist im Core-Set
-    // enthalten (transitiv über material3) — spart mehrere MB.
+    // Nur das Core-Icon-Set (material3 bringt es nicht mehr transitiv mit); bewusst kein
+    // material-icons-extended — spart mehrere MB.
+    implementation(libs.androidx.compose.material.icons.core)
 
     // Media3 / ExoPlayer inkl. HLS für .m3u8-Streams
     implementation(libs.androidx.media3.exoplayer)
     implementation(libs.androidx.media3.exoplayer.hls)
     implementation(libs.androidx.media3.ui)
+    // MediaSession: Medientasten der Fernbedienung / Systemsteuerung der Wiedergabe
+    implementation(libs.androidx.media3.session)
 
     // Persistenz (URL, Kanäle, Favoriten)
     implementation(libs.androidx.datastore.preferences)

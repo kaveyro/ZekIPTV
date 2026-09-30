@@ -165,9 +165,12 @@ fun MainScreen(mainViewModel: MainViewModel = viewModel()) {
 
     val epgDialogChannel by mainViewModel.epgChannel
     if (epgDialogChannel != null) {
+        val channel = epgDialogChannel!!
         EpgDayDialog(
-            channelName = epgDialogChannel!!.name,
-            programmes = mainViewModel.programmesFor(epgDialogChannel!!),
+            channelName = channel.name,
+            programmes = mainViewModel.programmesFor(channel),
+            catchupFrom = mainViewModel.catchupFrom(channel),
+            onPlayCatchup = { programme -> mainViewModel.playCatchup(channel, programme) },
             onDismiss = { mainViewModel.closeEpg() }
         )
     }

@@ -4,10 +4,16 @@ A modern Android IPTV player built with Kotlin and Jetpack Compose, optimized fo
 
 ## Features
 
-- **M3U Playlist Support**: Load and manage IPTV playlists in M3U format
+- **M3U Playlist Support**: Load and manage IPTV playlists in M3U format (incl. gzip,
+  `#EXTGRP` and per-stream `#EXTVLCOPT` user agent / referrer)
+- **Xtream Codes**: Movies, series, account info (expiry, connections) and catch-up for
+  channels with a provider archive
 - **XMLTV EPG Integration**: Electronic Program Guide support for channel scheduling
 - **HLS Streaming**: Full support for HLS streams (.m3u8) via Media3/ExoPlayer
+- **Player**: Aspect ratio modes, numeric channel input, audio/subtitle tracks, sleep timer,
+  media session (remote media keys), picture-in-picture on phones
 - **Channel Favorites**: Mark and quickly access your favorite channels
+- **Parental PIN**: Lock hidden categories and backup import
 - **TV-Optimized UI**: Designed for 10-foot interface with D-pad navigation
 - **Background Refresh**: Automatic playlist and EPG updates via WorkManager
 - **Channel Logos**: Automatic logo loading and caching with Coil
@@ -22,15 +28,15 @@ A modern Android IPTV player built with Kotlin and Jetpack Compose, optimized fo
 - **Background Tasks**: WorkManager for periodic updates
 - **Image Loading**: Coil Compose for channel logos
 - **Min SDK**: 24 (Android 7.0)
-- **Target SDK**: 34 (Android 14)
+- **Target SDK**: 36 (Android 16)
 
 ## Building the App
 
 ### Prerequisites
 
-- Android Studio Hedgehog (2023.1.1) or newer
-- JDK 17
-- Gradle 8.x (included via wrapper)
+- A recent Android Studio with Android Gradle Plugin 9.4 support
+- JDK 17 or newer
+- Gradle 9.8 (included via wrapper), Kotlin 2.4 (built-in Kotlin of AGP 9)
 
 ### Build Steps
 
@@ -77,6 +83,8 @@ On first launch, configure your IPTV playlist:
 
 - R8 code shrinking and resource minification for smaller APK size
 - Optimized for Fire TV's limited hardware resources
+- Channel list stored in its own file (not in DataStore), so settings writes stay small
+- Streaming XMLTV parser that only keeps programmes of the playlist's channels
 - Efficient logo caching to minimize network usage
 - Leanback support for Android TV launcher integration
 
@@ -94,7 +102,10 @@ Contributions are welcome! Please feel free to submit issues and pull requests.
 
 ## Version History
 
-- **1.7.1**: Current version with optimized Fire TV support
+- **1.8.0**: Catch-up, account info, parental PIN, aspect ratio / numeric channel input,
+  picture-in-picture, media session, backup via file picker, performance and stability fixes,
+  targetSdk 36 and updated dependencies
+- **1.7.1**: Optimized Fire TV support
 - Previous versions available in releases
 
 ---

@@ -13,6 +13,10 @@ class M3uParser {
         var pendingLogo: String? = null
         var pendingGroup: String? = null
         var pendingTvgId: String? = null
+        // #EXTGRP / #EXTVLCOPT dürfen vor oder nach #EXTINF stehen — gelten bis zur URL-Zeile.
+        var pendingExtGroup: String? = null
+        var pendingUserAgent: String? = null
+        var pendingReferrer: String? = null
 
         inputStream.bufferedReader().forEachLine { rawLine ->
             val line = rawLine.trim()
@@ -33,6 +37,22 @@ class M3uParser {
                     pendingLogo = attrs["tvg-logo"]?.ifEmpty { null }
                     pendingGroup = attrs["group-title"]?.ifEmpty { null }
                     pendingTvgId = attrs["tvg-id"]?.ifEmpty { null }
+                    attrs["http-user-agent"]?.ifEmpty { null }?.let { pendingUserAgent = it }
+                    attrs["http-referrer"]?.ifEmpty { null }?.let { pendingReferrer = it }
+                }
+
+                line.startsWith("#EXTGRP:", ignoreCase = true) -> {
+                    pendingExtGroup = line.substringAfter(':').trim().ifEmpty { null }
+                }
+
+                line.startsWith("#EXTVLCOPT:", ignoreCase = true) -> {
+                    val option = line.substringAfter(':')
+                    val key = option.substringBefore('=').trim().lowercase()
+                    val value = option.substringAfter('=', "").trim().ifEmpty { null }
+                    when (key) {
+                        "http-user-agent" -> pendingUserAgent = value
+                        "http-referrer", "http-referer" -> pendingReferrer = value
+                    }
                 }
 
                 line.isEmpty() || line.startsWith("#") -> {
@@ -48,8 +68,10 @@ class M3uParser {
                                 name = name,
                                 url = line,
                                 logo = pendingLogo,
-                                group = pendingGroup,
-                                tvgId = pendingTvgId
+                                group = pendingGroup ?: pendingExtGroup,
+                                tvgId = pendingTvgId,
+                                userAgent = pendingUserAgent,
+                                referrer = pendingReferrer
                             )
                         )
                     }
@@ -57,6 +79,9 @@ class M3uParser {
                     pendingLogo = null
                     pendingGroup = null
                     pendingTvgId = null
+                    pendingExtGroup = null
+                    pendingUserAgent = null
+                    pendingReferrer = null
                 }
             }
         }

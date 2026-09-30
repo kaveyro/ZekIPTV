@@ -12,6 +12,8 @@ object Http {
 
     private const val MAX_REDIRECTS = 5
 
+    private val CREDENTIAL_PARAM = Regex("(?i)((?:username|password)=)[^&]*")
+
     /**
      * Öffnet eine URL mit explizitem User-Agent (manche Anbieter blocken den Java-Default)
      * und folgt Redirects auch über Protokollwechsel hinweg (HttpURLConnection folgt
@@ -52,6 +54,9 @@ object Http {
         buffered.reset()
         return if (b1 == 0x1f && b2 == 0x8b) GZIPInputStream(buffered) else buffered
     }
+
+    /** Maskiert Zugangsdaten in URLs (username=/password=) — für Logausgaben. */
+    fun redact(url: String): String = url.replace(CREDENTIAL_PARAM, "$1***")
 
     /** Lädt eine URL vollständig als Text (für JSON-API-Antworten). */
     fun readText(url: String): String = openStream(url).use { it.readBytes().decodeToString() }

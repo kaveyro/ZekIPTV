@@ -1,5 +1,8 @@
 package com.zekikoese
 
+import android.content.ActivityNotFoundException
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -21,7 +24,9 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.Button
@@ -42,6 +47,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.zekikoese.ui.tvFocusFrame
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 /** Kuratierte, frei verfügbare XMLTV-EPG-Quellen für den Schnell-Adder. */
 private val FREE_EPG_SOURCES = listOf(
@@ -68,6 +76,20 @@ fun SettingsScreen(mainViewModel: MainViewModel) {
 
     var showPlaylistDialog by remember { mutableStateOf(false) }
     var showEpgDialog by remember { mutableStateOf(false) }
+    // Jugendschutz: welcher PIN-Dialog offen ist ("unlock" | "set") + letzte Meldung.
+    var pinDialog by remember { mutableStateOf<String?>(null) }
+    var pinMessage by remember { mutableStateOf("") }
+    val parentalPin by mainViewModel.parentalPin
+    val parentalUnlocked by mainViewModel.parentalUnlocked
+    val parentalLocked = parentalPin.isNotEmpty() && !parentalUnlocked
+
+    // Backup per System-Dateidialog; ohne Dateidialog (viele Fire-TV-Geräte) in den App-Ordner.
+    val exportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/json")
+    ) { uri -> if (uri != null) mainViewModel.exportBackup(uri) }
+    val importLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri -> if (uri != null) mainViewModel.importBackup(uri) }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize().padding(start = 16.dp, end = 32.dp, top = 24.dp, bottom = 24.dp),
@@ -111,6 +133,43 @@ fun SettingsScreen(mainViewModel: MainViewModel) {
                 containerColor = MaterialTheme.colorScheme.secondaryContainer,
                 contentColor = MaterialTheme.colorScheme.onSecondaryContainer
             )
+        }
+
+        // ---------- Anbieter-Konto (Xtream) ----------
+        val xtreamAvailable by mainViewModel.xtreamAvailable
+        if (xtreamAvailable) {
+            item { SectionTitle("Anbieter-Konto", icon = Icons.Filled.AccountCircle) }
+            item {
+                val info by mainViewModel.accountInfo
+                val error by mainViewModel.accountInfoError
+                val dateFormat = remember { SimpleDateFormat("dd.MM.yyyy", Locale.GERMANY) }
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    val current = info
+                    if (current == null) {
+                        Text(
+                            error.ifEmpty { "Konto-Info wird geladen…" },
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    } else {
+                        Text(
+                            "Status: ${current.status ?: "unbekannt"}" + if (current.isTrial) " (Testzugang)" else "",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        Text(
+                            "Gültig bis: " + (current.expiresAtMs?.let { dateFormat.format(Date(it)) } ?: "unbegrenzt"),
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        if (current.maxConnections != null) {
+                            Text(
+                                "Verbindungen: ${current.activeConnections ?: 0} von ${current.maxConnections}",
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    TvButton(text = "Konto-Info aktualisieren", onClick = { mainViewModel.refreshAccountInfo() })
+                }
+            }
         }
 
         // ---------- Design ----------
@@ -171,13 +230,17 @@ fun SettingsScreen(mainViewModel: MainViewModel) {
             item { SectionTitle("Live-TV-Kategorien", icon = Icons.Filled.Info) }
             item {
                 Text(
-                    "OK blendet eine Kategorie aus bzw. wieder ein. Ausgeblendete Kategorien (✕) " +
-                        "erscheinen weder in Live-TV noch in der Suche.",
+                    if (parentalLocked) {
+                        "🔒 Durch die Jugendschutz-PIN gesperrt (siehe unten)."
+                    } else {
+                        "OK blendet eine Kategorie aus bzw. wieder ein. Ausgeblendete Kategorien (✕) " +
+                            "erscheinen weder in Live-TV noch in der Suche."
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                 )
             }
-            item {
+            if (!parentalLocked) item {
                 FlowRow(
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
@@ -193,6 +256,44 @@ fun SettingsScreen(mainViewModel: MainViewModel) {
             }
         }
 
+        // ---------- Jugendschutz ----------
+        item { SectionTitle("Jugendschutz", icon = Icons.Filled.Lock) }
+        item {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                when {
+                    parentalPin.isEmpty() ->
+                        TvButton(text = "PIN festlegen...", onClick = { pinDialog = "set" })
+                    parentalLocked ->
+                        TvButton(text = "Entsperren...", onClick = { pinDialog = "unlock" })
+                    else -> {
+                        TvButton(text = "PIN ändern...", onClick = { pinDialog = "set" })
+                        TvButton(
+                            text = "PIN entfernen",
+                            onClick = {
+                                mainViewModel.setParentalPin("")
+                                pinMessage = "Jugendschutz deaktiviert."
+                            },
+                            containerColor = MaterialTheme.colorScheme.errorContainer,
+                            contentColor = MaterialTheme.colorScheme.onErrorContainer
+                        )
+                    }
+                }
+            }
+        }
+        item {
+            Text(
+                pinMessage.ifEmpty {
+                    "Mit PIN lassen sich ausgeblendete Kategorien nur nach Eingabe wieder einblenden; " +
+                        "ihre Sender erscheinen auch nicht auf Home. Der Backup-Import ist dann ebenfalls gesperrt."
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+            )
+        }
+
         // ---------- Backup ----------
         item { SectionTitle("Backup", icon = Icons.Filled.Info) }
         item {
@@ -203,11 +304,23 @@ fun SettingsScreen(mainViewModel: MainViewModel) {
             ) {
                 TvButton(
                     text = "Backup exportieren",
-                    onClick = { mainViewModel.exportBackup() }
+                    onClick = {
+                        try {
+                            exportLauncher.launch("zekiptv-backup.json")
+                        } catch (e: ActivityNotFoundException) {
+                            mainViewModel.exportBackup()
+                        }
+                    }
                 )
                 TvButton(
                     text = "Backup importieren",
-                    onClick = { mainViewModel.importBackup() }
+                    onClick = {
+                        try {
+                            importLauncher.launch(arrayOf("application/json", "text/plain", "application/octet-stream"))
+                        } catch (e: ActivityNotFoundException) {
+                            mainViewModel.importBackup()
+                        }
+                    }
                 )
             }
         }
@@ -216,7 +329,8 @@ fun SettingsScreen(mainViewModel: MainViewModel) {
             Text(
                 backupInfo.ifEmpty {
                     "Sichert Playlists, Favoriten, EPG-Quellen und Einstellungen als JSON-Datei " +
-                        "im App-Ordner (per Dateimanager/adb übertragbar)."
+                        "(Speicherort wählbar; ohne Dateiauswahl im App-Ordner). Achtung: Die Datei " +
+                        "enthält die Playlist-URLs inklusive Zugangsdaten."
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
@@ -308,6 +422,33 @@ fun SettingsScreen(mainViewModel: MainViewModel) {
             label = "XMLTV-URL (.xml oder .xml.gz)",
             onConfirm = { url -> mainViewModel.addEpgSource(url) },
             onDismiss = { showEpgDialog = false }
+        )
+    }
+    when (pinDialog) {
+        "unlock" -> SingleTextInputDialog(
+            title = "Jugendschutz entsperren",
+            label = "PIN",
+            confirmText = "Entsperren",
+            isPin = true,
+            onConfirm = { pin ->
+                pinMessage = if (mainViewModel.unlockParental(pin)) "Entsperrt bis zum nächsten App-Start." else "Falsche PIN."
+            },
+            onDismiss = { pinDialog = null }
+        )
+        "set" -> SingleTextInputDialog(
+            title = "Jugendschutz-PIN festlegen",
+            label = "Neue PIN (mind. 4 Ziffern)",
+            confirmText = "Speichern",
+            isPin = true,
+            onConfirm = { pin ->
+                if (pin.length >= 4) {
+                    mainViewModel.setParentalPin(pin)
+                    pinMessage = "PIN gespeichert."
+                } else {
+                    pinMessage = "Die PIN braucht mindestens 4 Ziffern."
+                }
+            },
+            onDismiss = { pinDialog = null }
         )
     }
 }
