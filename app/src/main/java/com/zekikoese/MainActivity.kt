@@ -24,9 +24,14 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -34,9 +39,11 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
 import com.zekikoese.ui.LocalInPictureInPicture
@@ -223,12 +230,8 @@ fun IptvApp(mainViewModel: MainViewModel = viewModel()) {
                             media = it,
                             mainViewModel = mainViewModel,
                             epg = liveChannel?.let { mainViewModel.epgFor(it) } ?: EpgNowNext(null, null, null),
-                            channelNumber = liveChannel?.let { ch ->
-                                mainViewModel.visibleChannels.value
-                                    .indexOfFirst { it.url == ch.url }
-                                    .takeIf { it >= 0 }
-                                    ?.plus(1)
-                            },
+                            // Feste Nummer (Position unter "Alle") — unabhängig vom Kategorie-Filter.
+                            channelNumber = liveChannel?.let { mainViewModel.channelNumberOf(it) },
                             resumeMs = mainViewModel.resumeFor(it.url),
                             sleepMinutes = mainViewModel.sleepTimerMinutes.value,
                             resizeMode = mainViewModel.resizeMode.value,
@@ -263,5 +266,29 @@ fun IptvApp(mainViewModel: MainViewModel = viewModel()) {
                 }
             }
         }
+
+        // Kurze Rückmeldungen (z. B. Favorit umgeschaltet). Auf dem TV ohne Aktionsknopf — eine
+        // Snackbar ist per D-Pad kaum erreichbar; dort lässt sich die Aktion erneut auslösen.
+        val isTv = LocalIsTv.current
+        val snackbarHostState = remember { SnackbarHostState() }
+        val message by mainViewModel.message
+        LaunchedEffect(message) {
+            val current = message ?: return@LaunchedEffect
+            val result = snackbarHostState.showSnackbar(
+                message = current.text,
+                actionLabel = if (isTv) null else current.actionLabel,
+                duration = SnackbarDuration.Short
+            )
+            if (result == SnackbarResult.ActionPerformed) current.action?.invoke()
+            if (mainViewModel.message.value == current) mainViewModel.message.value = null
+        }
+        val aboveBottomBar = !isTv && media == null && selectedVod == null && selectedSeries == null
+        SnackbarHost(
+            hostState = snackbarHostState,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .windowInsetsPadding(WindowInsets.safeDrawing)
+                .padding(bottom = if (aboveBottomBar) 80.dp else 16.dp)
+        )
     }
 }

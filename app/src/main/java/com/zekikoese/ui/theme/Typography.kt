@@ -45,11 +45,12 @@ val TvTypography = Typography(
         fontSize = 14.sp,
         lineHeight = 20.sp
     ),
+    // Hinweise/Untertitel: auf 3 m Abstand unter 14 sp kaum lesbar.
     bodySmall = TextStyle(
         fontFamily = FontFamily.Default,
         fontWeight = FontWeight.Normal,
-        fontSize = 12.sp,
-        lineHeight = 16.sp,
+        fontSize = 14.sp,
+        lineHeight = 20.sp,
         letterSpacing = 0.2.sp
     ),
     labelLarge = TextStyle(

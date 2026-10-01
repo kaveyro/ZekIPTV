@@ -130,6 +130,11 @@ It bundles the [Jellyfin Media3 FFmpeg decoder](https://github.com/jellyfin/jell
 
 ## Version History
 
+- **1.9.1**: Usability and design pass — catalog loading errors with retry instead of endless
+  placeholders, confirmation before deleting playlists/EPG sources, validated input dialogs,
+  PIN errors shown in the dialog, touch ripple and ⋮ channel actions on phones, readable playback
+  errors with retry / next channel, timeshift start indicator, fixed channel numbers and zapping
+  within the list playback was started from, TV focus fixes, clearer audio track names
 - **1.9.0**: Timeshift (pause/rewind live TV), automatic frame rate matching, FFmpeg audio
   decoder (AC3/E-AC3/DTS), M3U → Xtream detection and Xtream login, SQLite storage for large
   playlists, Baseline Profile, in-app update check, targetSdk 37 (local network permission),

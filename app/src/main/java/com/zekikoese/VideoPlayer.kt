@@ -11,6 +11,7 @@ import androidx.annotation.OptIn
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -20,6 +21,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -29,6 +31,7 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -45,10 +48,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -69,6 +75,7 @@ import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.HttpDataSource
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
@@ -79,6 +86,7 @@ import androidx.media3.ui.PlayerView
 import com.zekikoese.ui.LocalInPictureInPicture
 import com.zekikoese.ui.LocalIsTv
 import com.zekikoese.ui.tvFocusFrame
+import kotlinx.coroutines.android.awaitFrame
 import kotlinx.coroutines.delay
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
@@ -163,6 +171,8 @@ fun VideoPlayer(
     var liveOffsetMs by remember { mutableStateOf(0L) }
     // Nach Rückkehr aus dem Hintergrund neu einschalten (Aufnahme wird dort gestoppt).
     var retuneKey by remember { mutableStateOf(0) }
+    // Timeshift-Start: bis der Rekorder bereit ist, ist der Player gestoppt (kein Buffering-Spinner).
+    var timeshiftStarting by remember { mutableStateOf(false) }
 
     // Cross-Protocol-Redirects erlauben: VOD-/Serien-Streams dieses Anbieters leiten
     // von http auf https um — das folgt ExoPlayers HTTP-Quelle standardmäßig nicht.
@@ -211,11 +221,18 @@ fun VideoPlayer(
     DisposableEffect(Unit) {
         val listener = object : Player.Listener {
             override fun onPlayerError(error: PlaybackException) {
-                if (reconnectAttempt < MAX_RECONNECT_ATTEMPTS) {
+                val httpStatus = generateSequence(error.cause) { it.cause }
+                    .filterIsInstance<HttpDataSource.InvalidResponseCodeException>()
+                    .firstOrNull()?.responseCode
+                // 4xx (Zugang verweigert, nicht gefunden …) wird durch Wiederholen nicht besser —
+                // sofort melden statt ~30 s Reconnect-Versuche abzuwarten (außer Timeout/Rate-Limit).
+                val permanent = httpStatus != null && httpStatus in 400..499 && httpStatus != 408 && httpStatus != 429
+                if (!permanent && reconnectAttempt < MAX_RECONNECT_ATTEMPTS) {
                     reconnectAttempt++
                     reconnectTrigger++
                 } else {
-                    playerError = "Wiedergabefehler: ${error.errorCodeName}"
+                    reconnectAttempt = 0
+                    playerError = playbackErrorMessage(error.errorCode, httpStatus, error.errorCodeName)
                 }
             }
 
@@ -270,7 +287,13 @@ fun VideoPlayer(
             )
             session.start()
             recorder.value = session
-            if (session.awaitReady(15_000)) {
+            timeshiftStarting = true
+            val ready = try {
+                session.awaitReady(15_000)
+            } finally {
+                timeshiftStarting = false
+            }
+            if (ready) {
                 timeshiftActive = true
                 item.setUri(Uri.fromFile(session.playlistFile))
                     .setMimeType(MimeTypes.APPLICATION_M3U8)
@@ -422,6 +445,8 @@ fun VideoPlayer(
         overlayVisible = false
     }
 
+    val retryFocus = remember { FocusRequester() }
+
     Box(modifier = Modifier.fillMaxSize()) {
         AndroidView(
             modifier = Modifier.fillMaxSize(),
@@ -529,17 +554,28 @@ fun VideoPlayer(
             (isTv || !controllerVisible.value)
         ) {
             val seconds = liveOffsetMs / 1000
-            Text(
-                text = "⏪ −%d:%02d".format(seconds / 60, seconds % 60),
-                color = Color.White,
-                style = MaterialTheme.typography.titleMedium,
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
                     .align(Alignment.TopEnd)
                     .padding(24.dp)
                     .clip(RoundedCornerShape(10.dp))
                     .background(Color.Black.copy(alpha = 0.6f))
                     .padding(horizontal = 14.dp, vertical = 6.dp)
-            )
+            ) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_fast_rewind),
+                    contentDescription = "Zeitversetzt",
+                    tint = Color.White,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    text = "−%d:%02d".format(seconds / 60, seconds % 60),
+                    color = Color.White,
+                    style = MaterialTheme.typography.titleMedium
+                )
+            }
         }
 
         // Direktwahl-Anzeige oben rechts.
@@ -557,6 +593,31 @@ fun VideoPlayer(
             )
         }
 
+        // Fehler: Fokus auf "Erneut versuchen", damit die Fernbedienung die Knöpfe erreicht.
+        LaunchedEffect(playerError != null) {
+            if (playerError == null || !isTv) return@LaunchedEffect
+            repeat(10) {
+                awaitFrame()
+                if (runCatching { retryFocus.requestFocus() }.isSuccess) return@LaunchedEffect
+            }
+        }
+
+        // Timeshift startet: Hinweis statt minutenlang schwarzem Bild.
+        if (timeshiftStarting && !inPip) {
+            Column(
+                modifier = Modifier.align(Alignment.Center),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                CircularProgressIndicator(color = Color.White)
+                Spacer(Modifier.height(16.dp))
+                Text(
+                    text = "Sender wird gestartet (Timeshift)…",
+                    color = Color.White,
+                    style = MaterialTheme.typography.titleMedium
+                )
+            }
+        }
+
         if (!inPip && (overlayVisible || reconnectAttempt > 0 || playerError != null)) {
             // Uhrzeit zum Einblende-Zeitpunkt (Overlay lebt nur wenige Sekunden).
             val timeText = remember(overlayVisible, infoTrigger.value, media.url) {
@@ -572,7 +633,13 @@ fun VideoPlayer(
                             colors = listOf(Color.Black.copy(alpha = 0.78f), Color.Transparent)
                         )
                     )
-                    .padding(horizontal = 40.dp, vertical = 28.dp)
+                    // Handy: unter Zurück-Knopf und Knopfreihe beginnen, solange diese sichtbar sind.
+                    .padding(
+                        start = 40.dp,
+                        end = 40.dp,
+                        top = if (!isTv && controllerVisible.value) 76.dp else 28.dp,
+                        bottom = 28.dp
+                    )
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
@@ -636,6 +703,28 @@ fun VideoPlayer(
                         color = Color(0xFFFFB4AB),
                         style = MaterialTheme.typography.titleMedium
                     )
+                    Spacer(Modifier.height(12.dp))
+                    // Kein Sackgassen-Fehler: direkt neu versuchen oder (Live) weiterzappen.
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        TvButton(
+                            text = "Erneut versuchen",
+                            onClick = {
+                                playerError = null
+                                reconnectAttempt = 0
+                                retuneKey++
+                            },
+                            modifier = Modifier.focusRequester(retryFocus)
+                        )
+                        val zap = currentOnZap
+                        if (zap != null) {
+                            TvButton(
+                                text = "Nächster Sender",
+                                onClick = { zap(+1) },
+                                containerColor = Color.White.copy(alpha = 0.15f),
+                                contentColor = Color.White
+                            )
+                        }
+                    }
                 }
                 if (sleepMinutes != null) {
                     Text(
@@ -798,7 +887,7 @@ private fun PlayerMenuDialog(
 
                 // Timeshift: zurück zum aktuellen Live-Bild.
                 if (onGoLive != null) {
-                    MenuRow(label = "⏩ Zum Live-Bild", onClick = { onGoLive(); onDismiss() })
+                    MenuRow(label = "Zum Live-Bild", iconRes = R.drawable.ic_fast_forward, onClick = { onGoLive(); onDismiss() })
                 }
 
                 // Senderwechsel (nur Live, nur TV) — konfliktfrei per Menü statt DPAD.
@@ -807,7 +896,7 @@ private fun PlayerMenuDialog(
                     MenuRow(label = "▼ Vorheriger Sender", onClick = { onZap(-1); onDismiss() })
                 }
                 if (isTv && onSwapLast != null) {
-                    MenuRow(label = "↩ Zuletzt gesehener Sender", onClick = { onSwapLast(); onDismiss() })
+                    MenuRow(label = "Zuletzt gesehener Sender", onClick = { onSwapLast(); onDismiss() })
                 }
 
                 MenuRow(
@@ -834,9 +923,14 @@ private fun PlayerMenuDialog(
                     )
                     audioGroups.forEachIndexed { index, group ->
                         val format = group.getTrackFormat(0)
-                        val label = format.label
-                            ?: format.language?.uppercase()
-                            ?: "Spur ${index + 1}"
+                        // Sprache ausgeschrieben + Format/Kanäle (z. B. "Deutsch · Dolby Digital · 5.1").
+                        val label = audioTrackLabel(
+                            label = format.label,
+                            language = format.language,
+                            mimeType = format.sampleMimeType,
+                            channelCount = format.channelCount,
+                            index = index
+                        )
                         MenuRow(
                             label = (if (group.isSelected) "✓ " else "") + label,
                             onClick = {
@@ -869,7 +963,11 @@ private fun PlayerMenuDialog(
                     textGroups.forEachIndexed { index, group ->
                         val format = group.getTrackFormat(0)
                         val label = format.label
-                            ?: format.language?.uppercase()
+                            ?: format.language?.takeIf { it.isNotBlank() && it != "und" }?.let { lang ->
+                                Locale.forLanguageTag(lang).getDisplayLanguage(Locale.GERMAN)
+                                    .ifBlank { lang.uppercase() }
+                                    .replaceFirstChar { it.titlecase(Locale.GERMAN) }
+                            }
                             ?: "Untertitel ${index + 1}"
                         MenuRow(
                             label = (if (group.isSelected) "✓ " else "") + label,
@@ -893,19 +991,6 @@ private fun PlayerMenuDialog(
 
 @kotlin.OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun MenuRow(label: String, onClick: () -> Unit) {
-    Text(
-        text = label,
-        color = MaterialTheme.colorScheme.onSurface,
-        style = MaterialTheme.typography.titleMedium,
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 2.dp)
-            .tvFocusFrame(
-                onClick = onClick,
-                shape = RoundedCornerShape(8.dp),
-                restColor = Color.Transparent
-            )
-            .padding(horizontal = 12.dp, vertical = 10.dp)
-    )
+private fun MenuRow(label: String, iconRes: Int? = null, onClick: () -> Unit) {
+    DialogRow(label = label, iconRes = iconRes, maxLines = 2, onClick = onClick)
 }

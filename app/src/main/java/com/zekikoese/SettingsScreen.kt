@@ -5,8 +5,6 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -25,11 +23,15 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.AccountCircle
+import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.DateRange
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Star
-import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -44,6 +46,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.zekikoese.ui.LocalIsTv
@@ -64,6 +67,18 @@ private val FREE_EPG_SOURCES = listOf(
     "USA (EPGTalk)" to "https://raw.githubusercontent.com/acidjesuz/EPGTalk/master/US_guide.xml.gz",
 )
 
+/** Offene Sicherheitsabfrage bzw. Aktionsauswahl der Einstellungen. */
+private sealed interface SettingsDialog {
+    data class PlaylistActions(val entry: PlaylistEntry) : SettingsDialog
+    data class RemovePlaylist(val entry: PlaylistEntry) : SettingsDialog
+    data class RemoveEpgSource(val source: String) : SettingsDialog
+    data object ClearEpgCache : SettingsDialog
+    data object RemovePin : SettingsDialog
+    data object AddEpgSource : SettingsDialog
+    data object UnlockPin : SettingsDialog
+    data object SetPin : SettingsDialog
+}
+
 @OptIn(ExperimentalFoundationApi::class, ExperimentalLayoutApi::class)
 @Composable
 fun SettingsScreen(mainViewModel: MainViewModel) {
@@ -75,11 +90,10 @@ fun SettingsScreen(mainViewModel: MainViewModel) {
     val allGroups by mainViewModel.allGroups
     val hiddenGroups by mainViewModel.hiddenGroups
     val isTv = LocalIsTv.current
+    // Bedienhinweise je Gerät: Fernbedienung (OK) oder Touch (Antippen).
+    val tap = if (isTv) "OK" else "Antippen"
 
-    var showPlaylistDialog by remember { mutableStateOf(false) }
-    var showEpgDialog by remember { mutableStateOf(false) }
-    // Jugendschutz: welcher PIN-Dialog offen ist ("unlock" | "set") + letzte Meldung.
-    var pinDialog by remember { mutableStateOf<String?>(null) }
+    var dialog by remember { mutableStateOf<SettingsDialog?>(null) }
     var pinMessage by remember { mutableStateOf("") }
     val parentalPin by mainViewModel.parentalPin
     val parentalUnlocked by mainViewModel.parentalUnlocked
@@ -97,40 +111,30 @@ fun SettingsScreen(mainViewModel: MainViewModel) {
         modifier = Modifier.fillMaxSize().padding(start = 16.dp, end = 32.dp, top = 24.dp, bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        item {
-            Text(
-                "Einstellungen",
-                style = MaterialTheme.typography.headlineMedium,
-                modifier = Modifier.padding(bottom = 4.dp)
-            )
-        }
+        item(key = "settings_1") { ScreenTitle("Einstellungen") }
 
         // ---------- Playlists ----------
-        item { SectionTitle("Playlists", icon = Icons.AutoMirrored.Filled.List) }
+        item(key = "settings_2") { SectionTitle("Playlists", icon = Icons.AutoMirrored.Filled.List) }
         items(playlists, key = { it.url + it.name }) { entry ->
             val isActive = entry.url == activeUrl
             SettingsRow(
-                title = if (isActive) "${entry.name}   ✓" else entry.name,
+                title = entry.name,
                 // Zugangsdaten nicht im Klartext anzeigen (Xtream-URLs enthalten Benutzer/Passwort).
                 subtitle = Http.redact(entry.url),
                 isSelected = isActive,
-                onClick = {
-                    mainViewModel.selectPlaylist(entry)
-                    mainViewModel.navigate(NavDestination.LIVE)
-                },
-                onLongClick = { mainViewModel.removePlaylist(entry) }
+                badge = if (isActive) "aktiv" else null,
+                onClick = { dialog = SettingsDialog.PlaylistActions(entry) },
+                onLongClick = { dialog = SettingsDialog.PlaylistActions(entry) }
             )
         }
-        item {
-            Text(
+        item(key = "settings_3") {
+            Hint(
                 if (playlists.isEmpty()) "Noch keine Playlist gespeichert."
-                else "OK = aktivieren und laden · lang drücken = entfernen",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                else "$tap öffnet die Aktionen: aktivieren, neu laden oder entfernen."
             )
         }
         // Erkannter, noch nicht übernommener Xtream-Zugang der aktiven M3U-Playlist.
-        item {
+        item(key = "settings_4") {
             val suggestion by mainViewModel.xtreamSuggestion
             val current = suggestion
             if (current != null) {
@@ -165,22 +169,90 @@ fun SettingsScreen(mainViewModel: MainViewModel) {
                 }
             }
         }
-        item {
+        item(key = "settings_5") {
             TvButton(
-                text = "Neue Playlist hinzufügen...",
-                onClick = { showPlaylistDialog = true },
+                text = "Neue Playlist hinzufügen…",
+                onClick = { mainViewModel.showPlaylistDialog.value = true },
                 containerColor = MaterialTheme.colorScheme.secondaryContainer,
                 contentColor = MaterialTheme.colorScheme.onSecondaryContainer
             )
         }
 
+        // ---------- EPG ----------
+        item(key = "settings_6") { SectionTitle("Programmführer (EPG)", icon = Icons.Filled.DateRange) }
+        items(epgSources.toList(), key = { it }) { source ->
+            // Entfernen nur nach Rückfrage — Lang-Druck ist mit der D-Pad-Center-Taste auf
+            // Fire TV unzuverlässig, daher öffnet schon OK die Abfrage.
+            SettingsRow(
+                // Anbieter-EPG (xmltv.php) enthält Benutzer/Passwort — wie bei Playlists maskieren.
+                title = Http.redact(source),
+                subtitle = null,
+                onClick = { dialog = SettingsDialog.RemoveEpgSource(source) },
+                onLongClick = { dialog = SettingsDialog.RemoveEpgSource(source) }
+            )
+        }
+        item(key = "settings_7") {
+            Hint(
+                if (epgSources.isEmpty()) "Noch keine EPG-Quelle konfiguriert."
+                else "$tap auf eine Quelle = entfernen (mit Rückfrage)."
+            )
+        }
+        item(key = "settings_8") {
+            Text(
+                "Schnell hinzufügen (freie Quellen) — $tap fügt hinzu bzw. entfernt wieder:",
+                style = MaterialTheme.typography.bodyMedium
+            )
+        }
+        item(key = "settings_9") {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                FREE_EPG_SOURCES.forEach { (label, sourceUrl) ->
+                    val active = sourceUrl in epgSources
+                    GroupChip(label, selected = active) {
+                        if (active) {
+                            mainViewModel.removeEpgSource(sourceUrl)
+                        } else {
+                            mainViewModel.addEpgSource(sourceUrl)
+                        }
+                    }
+                }
+            }
+        }
+        item(key = "settings_10") {
+            // FlowRow statt Row: im Hochformat umbrechen, damit kein Knopf aus dem Bild rutscht.
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                TvButton(
+                    text = "Eigene Quelle hinzufügen…",
+                    onClick = { dialog = SettingsDialog.AddEpgSource },
+                    containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                    contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+                )
+                TvButton(text = "EPG aktualisieren", onClick = { mainViewModel.refreshEpg() })
+                TvButton(
+                    text = "Cache löschen",
+                    onClick = { dialog = SettingsDialog.ClearEpgCache },
+                    containerColor = MaterialTheme.colorScheme.errorContainer,
+                    contentColor = MaterialTheme.colorScheme.onErrorContainer
+                )
+            }
+        }
+        if (epgInfo.isNotEmpty()) {
+            item(key = "settings_11") { Text(epgInfo, style = MaterialTheme.typography.bodyMedium) }
+        }
+
         // ---------- Anbieter-Konto (Xtream) ----------
         val xtreamAvailable by mainViewModel.xtreamAvailable
         if (xtreamAvailable) {
-            item { SectionTitle("Anbieter-Konto", icon = Icons.Filled.AccountCircle) }
-            item {
+            item(key = "settings_12") { SectionTitle("Anbieter-Konto", icon = Icons.Filled.AccountCircle) }
+            item(key = "settings_13") {
                 val info by mainViewModel.accountInfo
                 val error by mainViewModel.accountInfoError
+                val linkedAccount by mainViewModel.xtreamLinked
                 val dateFormat = remember { SimpleDateFormat("dd.MM.yyyy", Locale.GERMANY) }
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     val current = info
@@ -190,13 +262,8 @@ fun SettingsScreen(mainViewModel: MainViewModel) {
                             style = MaterialTheme.typography.bodyMedium
                         )
                     } else {
-                        val linkedAccount by mainViewModel.xtreamLinked
                         if (linkedAccount) {
-                            Text(
-                                "Verknüpft mit der M3U-Playlist (erkannt aus den Stream-Adressen).",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                            )
+                            Hint("Verknüpft mit der M3U-Playlist (erkannt aus den Stream-Adressen).")
                         }
                         Text(
                             "Status: ${current.status ?: "unbekannt"}" + if (current.isTrial) " (Testzugang)" else "",
@@ -219,7 +286,6 @@ fun SettingsScreen(mainViewModel: MainViewModel) {
                         verticalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
                         TvButton(text = "Konto-Info aktualisieren", onClick = { mainViewModel.refreshAccountInfo() })
-                        val linkedAccount by mainViewModel.xtreamLinked
                         if (linkedAccount) {
                             TvButton(
                                 text = "Verknüpfung lösen",
@@ -233,119 +299,63 @@ fun SettingsScreen(mainViewModel: MainViewModel) {
             }
         }
 
-        // ---------- Design ----------
-        item { SectionTitle("Design", icon = Icons.Filled.Settings) }
-        item {
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                GroupChip("Dunkel", selected = themeMode == "dark") { mainViewModel.setThemeMode("dark") }
-                GroupChip("Hell", selected = themeMode == "light") { mainViewModel.setThemeMode("light") }
-                GroupChip("System", selected = themeMode == "system") { mainViewModel.setThemeMode("system") }
-            }
-        }
-
-        // ---------- Bedienoberfläche (TV vs. Smartphone) ----------
-        item { SectionTitle("Bedienoberfläche", icon = Icons.Filled.Settings) }
-        item {
-            val uiMode by mainViewModel.uiModeOverride
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                GroupChip("Automatisch", selected = uiMode == "auto") { mainViewModel.setUiMode("auto") }
-                GroupChip("TV", selected = uiMode == "tv") { mainViewModel.setUiMode("tv") }
-                GroupChip("Smartphone", selected = uiMode == "phone") { mainViewModel.setUiMode("phone") }
-            }
-        }
-        item {
-            Text(
-                "„Automatisch“ erkennt den Gerätetyp. TV = D-Pad-Oberfläche mit Navigations-Rail, " +
-                    "Smartphone = Touch-Oberfläche mit unterer Leiste und Hochformat.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+        // ---------- Wiedergabe ----------
+        item(key = "settings_14") { SectionTitle("Wiedergabe", icon = Icons.Filled.PlayArrow) }
+        item(key = "settings_15") {
+            val autoplay by mainViewModel.autoplayLast
+            ToggleRow(
+                label = "Letzten Sender beim Start abspielen:",
+                enabled = autoplay,
+                onChange = mainViewModel::setAutoplayLast
             )
         }
-
-        // ---------- Wiedergabe ----------
-        item { SectionTitle("Wiedergabe", icon = Icons.Filled.Settings) }
-        item {
-            val autoplay by mainViewModel.autoplayLast
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text("Letzten Sender beim Start abspielen:", style = MaterialTheme.typography.bodyMedium)
-                GroupChip("An", selected = autoplay) { mainViewModel.setAutoplayLast(true) }
-                GroupChip("Aus", selected = !autoplay) { mainViewModel.setAutoplayLast(false) }
-            }
-        }
-        item {
+        item(key = "settings_16") {
             val timeshiftOn by mainViewModel.timeshift
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                    itemVerticalAlignment = Alignment.CenterVertically
-            ) {
-                Text("Timeshift (Live-TV pausieren/zurückspulen):", style = MaterialTheme.typography.bodyMedium)
-                GroupChip("An", selected = timeshiftOn) { mainViewModel.setTimeshift(true) }
-                GroupChip("Aus", selected = !timeshiftOn) { mainViewModel.setTimeshift(false) }
-            }
+            ToggleRow(
+                label = "Timeshift (Live-TV pausieren/zurückspulen):",
+                enabled = timeshiftOn,
+                onChange = mainViewModel::setTimeshift
+            )
         }
-        item {
-            Text(
+        item(key = "settings_17") {
+            Hint(
                 "Nimmt Live-Sender während des Schauens auf (bis 30 min, max. 1 GB Zwischenspeicher) — " +
                     "Pause und Zurückspulen wie beim Festplattenrekorder. Der Senderstart dauert ca. 2 s länger. " +
-                    "HLS-Sender (.m3u8) nutzen das Zeitfenster des Anbieters.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                    "HLS-Sender (.m3u8) nutzen das Zeitfenster des Anbieters."
             )
         }
         // Automatische Bildwiederholrate — nur sinnvoll am Fernseher.
         if (isTv) {
-            item {
+            item(key = "settings_18") {
                 val afr by mainViewModel.autoFrameRate
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                    itemVerticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("Bildwiederholrate an Video anpassen:", style = MaterialTheme.typography.bodyMedium)
-                    GroupChip("An", selected = afr) { mainViewModel.setAutoFrameRate(true) }
-                    GroupChip("Aus", selected = !afr) { mainViewModel.setAutoFrameRate(false) }
-                }
-            }
-            item {
-                Text(
-                    "Schaltet den Fernseher z. B. für deutsches TV auf 50 Hz und für Filme auf 24 Hz — " +
-                        "flüssigere Schwenks. Beim Umschalten kann das Bild kurz schwarz werden.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                ToggleRow(
+                    label = "Bildwiederholrate an Video anpassen:",
+                    enabled = afr,
+                    onChange = mainViewModel::setAutoFrameRate
                 )
             }
-        }
-        item {
-            Text(
-                "Tipp: Im Player öffnet ◀ (links) die Senderliste zum Zappen, ▲ (hoch) die Programm-Info " +
-                    "und die MENÜ-Taste (☰) Senderwechsel, Tonspur, Untertitel und Sleep-Timer. " +
-                    "OK zeigt die Steuerleiste. In Senderlisten öffnet MENÜ die Sender-Aktionen; " +
-                    "⏩/⏪ blättern seitenweise.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-            )
+            item(key = "settings_19") {
+                Hint(
+                    "Schaltet den Fernseher z. B. für deutsches TV auf 50 Hz und für Filme auf 24 Hz — " +
+                        "flüssigere Schwenks. Beim Umschalten kann das Bild kurz schwarz werden."
+                )
+            }
         }
 
         // ---------- Live-TV-Kategorien ----------
         if (allGroups.isNotEmpty()) {
-            item { SectionTitle("Live-TV-Kategorien", icon = Icons.Filled.Info) }
-            item {
-                Text(
+            item(key = "settings_20") { SectionTitle("Live-TV-Kategorien", icon = Icons.Filled.Star) }
+            item(key = "settings_21") {
+                Hint(
                     if (parentalLocked) {
-                        "🔒 Durch die Jugendschutz-PIN gesperrt (siehe unten)."
+                        "Durch die Jugendschutz-PIN gesperrt (siehe unten)."
                     } else {
-                        "OK blendet eine Kategorie aus bzw. wieder ein. Ausgeblendete Kategorien (✕) " +
+                        "$tap blendet eine Kategorie aus bzw. wieder ein. Ausgeblendete Kategorien (✕) " +
                             "erscheinen weder in Live-TV noch in der Suche."
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                    }
                 )
             }
-            if (!parentalLocked) item {
+            if (!parentalLocked) item(key = "settings_22") {
                 FlowRow(
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
@@ -361,9 +371,115 @@ fun SettingsScreen(mainViewModel: MainViewModel) {
             }
         }
 
+        // ---------- Design ----------
+        item(key = "settings_23") { SectionTitle("Design", icon = Icons.Filled.Edit) }
+        item(key = "settings_24") {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                GroupChip("Dunkel", selected = themeMode == "dark") { mainViewModel.setThemeMode("dark") }
+                GroupChip("Hell", selected = themeMode == "light") { mainViewModel.setThemeMode("light") }
+                GroupChip("System", selected = themeMode == "system") { mainViewModel.setThemeMode("system") }
+            }
+        }
+
+        // ---------- Bedienoberfläche (TV vs. Smartphone) ----------
+        item(key = "settings_25") { SectionTitle("Bedienoberfläche", icon = Icons.Filled.Build) }
+        item(key = "settings_26") {
+            val uiMode by mainViewModel.uiModeOverride
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                GroupChip("Automatisch", selected = uiMode == "auto") { mainViewModel.setUiMode("auto") }
+                GroupChip("TV", selected = uiMode == "tv") { mainViewModel.setUiMode("tv") }
+                GroupChip("Smartphone", selected = uiMode == "phone") { mainViewModel.setUiMode("phone") }
+            }
+        }
+        item(key = "settings_27") {
+            Hint(
+                "„Automatisch“ erkennt den Gerätetyp. TV = D-Pad-Oberfläche mit Navigations-Rail, " +
+                    "Smartphone = Touch-Oberfläche mit unterer Leiste und Hochformat."
+            )
+        }
+
+        // ---------- Jugendschutz ----------
+        item(key = "settings_28") { SectionTitle("Jugendschutz", icon = Icons.Filled.Lock) }
+        item(key = "settings_29") {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                when {
+                    parentalPin.isEmpty() ->
+                        TvButton(text = "PIN festlegen…", onClick = { dialog = SettingsDialog.SetPin })
+                    parentalLocked ->
+                        TvButton(text = "Entsperren…", onClick = { dialog = SettingsDialog.UnlockPin })
+                    else -> {
+                        TvButton(text = "PIN ändern…", onClick = { dialog = SettingsDialog.SetPin })
+                        TvButton(
+                            text = "PIN entfernen",
+                            onClick = { dialog = SettingsDialog.RemovePin },
+                            containerColor = MaterialTheme.colorScheme.errorContainer,
+                            contentColor = MaterialTheme.colorScheme.onErrorContainer
+                        )
+                    }
+                }
+            }
+        }
+        item(key = "settings_30") {
+            Hint(
+                pinMessage.ifEmpty {
+                    "Mit PIN lassen sich ausgeblendete Kategorien nur nach Eingabe wieder einblenden; " +
+                        "ihre Sender erscheinen auch nicht auf Home. Der Backup-Import ist dann ebenfalls gesperrt."
+                }
+            )
+        }
+
+        // ---------- Backup ----------
+        item(key = "settings_31") { SectionTitle("Backup", icon = Icons.Filled.Share) }
+        item(key = "settings_32") {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                TvButton(
+                    text = "Backup exportieren",
+                    onClick = {
+                        try {
+                            exportLauncher.launch("zekiptv-backup.json")
+                        } catch (e: ActivityNotFoundException) {
+                            mainViewModel.exportBackup()
+                        }
+                    }
+                )
+                TvButton(
+                    text = "Backup importieren",
+                    onClick = {
+                        try {
+                            importLauncher.launch(arrayOf("application/json", "text/plain", "application/octet-stream"))
+                        } catch (e: ActivityNotFoundException) {
+                            mainViewModel.importBackup()
+                        }
+                    }
+                )
+            }
+        }
+        item(key = "settings_33") {
+            val backupInfo by mainViewModel.backupInfo
+            Hint(
+                backupInfo.ifEmpty {
+                    "Sichert Playlists, Favoriten, EPG-Quellen und Einstellungen als JSON-Datei " +
+                        "(Speicherort wählbar; ohne Dateiauswahl im App-Ordner). Achtung: Die Datei " +
+                        "enthält die Playlist-URLs inklusive Zugangsdaten."
+                }
+            )
+        }
+
         // ---------- App-Update ----------
-        item { SectionTitle("App-Update", icon = Icons.Filled.Info) }
-        item {
+        item(key = "settings_34") { SectionTitle("App-Update", icon = Icons.Filled.Refresh) }
+        item(key = "settings_35") {
             val update by mainViewModel.availableUpdate
             val status by mainViewModel.updateStatus
             val inProgress by mainViewModel.updateInProgress
@@ -391,211 +507,144 @@ fun SettingsScreen(mainViewModel: MainViewModel) {
                         contentColor = MaterialTheme.colorScheme.onSecondaryContainer
                     )
                 }
-                if (status.isNotEmpty()) {
-                    Text(
-                        status,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                    )
-                }
+                if (status.isNotEmpty()) Hint(status)
             }
         }
 
-        // ---------- Jugendschutz ----------
-        item { SectionTitle("Jugendschutz", icon = Icons.Filled.Lock) }
-        item {
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                when {
-                    parentalPin.isEmpty() ->
-                        TvButton(text = "PIN festlegen...", onClick = { pinDialog = "set" })
-                    parentalLocked ->
-                        TvButton(text = "Entsperren...", onClick = { pinDialog = "unlock" })
-                    else -> {
-                        TvButton(text = "PIN ändern...", onClick = { pinDialog = "set" })
-                        TvButton(
-                            text = "PIN entfernen",
-                            onClick = {
-                                mainViewModel.setParentalPin("")
-                                pinMessage = "Jugendschutz deaktiviert."
-                            },
-                            containerColor = MaterialTheme.colorScheme.errorContainer,
-                            contentColor = MaterialTheme.colorScheme.onErrorContainer
-                        )
-                    }
+        // ---------- Hilfe ----------
+        item(key = "settings_36") { SectionTitle("Bedienung", icon = Icons.Filled.Info) }
+        item(key = "settings_37") {
+            Hint(
+                if (isTv) {
+                    "Im Player öffnet ◀ (links) die Senderliste zum Zappen, ▲ (hoch) die Programm-Info " +
+                        "und die MENÜ-Taste (☰) Senderwechsel, Tonspur, Untertitel und Sleep-Timer. " +
+                        "OK zeigt die Steuerleiste, Zifferntasten wählen einen Sender direkt. " +
+                        "In Senderlisten öffnet MENÜ die Sender-Aktionen; die Spultasten blättern seitenweise."
+                } else {
+                    "Im Player zeigt Antippen die Steuerleiste; oben rechts liegen Programm-Info, " +
+                        "Senderwechsel und das Menü (Tonspur, Untertitel, Bildformat, Sleep-Timer). " +
+                        "In Senderlisten öffnet ⋮ (oder langes Drücken) die Sender-Aktionen."
                 }
-            }
-        }
-        item {
-            Text(
-                pinMessage.ifEmpty {
-                    "Mit PIN lassen sich ausgeblendete Kategorien nur nach Eingabe wieder einblenden; " +
-                        "ihre Sender erscheinen auch nicht auf Home. Der Backup-Import ist dann ebenfalls gesperrt."
-                },
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
             )
         }
-
-        // ---------- Backup ----------
-        item { SectionTitle("Backup", icon = Icons.Filled.Info) }
-        item {
-            // FlowRow statt Row: im Hochformat umbrechen, damit kein Button aus dem Bild rutscht.
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                TvButton(
-                    text = "Backup exportieren",
-                    onClick = {
-                        try {
-                            exportLauncher.launch("zekiptv-backup.json")
-                        } catch (e: ActivityNotFoundException) {
-                            mainViewModel.exportBackup()
-                        }
-                    }
-                )
-                TvButton(
-                    text = "Backup importieren",
-                    onClick = {
-                        try {
-                            importLauncher.launch(arrayOf("application/json", "text/plain", "application/octet-stream"))
-                        } catch (e: ActivityNotFoundException) {
-                            mainViewModel.importBackup()
-                        }
-                    }
-                )
-            }
-        }
-        item {
-            val backupInfo by mainViewModel.backupInfo
-            Text(
-                backupInfo.ifEmpty {
-                    "Sichert Playlists, Favoriten, EPG-Quellen und Einstellungen als JSON-Datei " +
-                        "(Speicherort wählbar; ohne Dateiauswahl im App-Ordner). Achtung: Die Datei " +
-                        "enthält die Playlist-URLs inklusive Zugangsdaten."
-                },
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-            )
-        }
-
-        // ---------- EPG ----------
-        item { SectionTitle("EPG-Quellen (XMLTV)", icon = Icons.Filled.Settings) }
-        items(epgSources.toList(), key = { it }) { source ->
-            // OK entfernt die Quelle direkt — Lang-Druck ist mit der D-Pad-Center-Taste
-            // auf Fire TV unzuverlässig. Wieder hinzufügen geht jederzeit über die Chips.
-            SettingsRow(
-                title = source,
-                subtitle = null,
-                onClick = { mainViewModel.removeEpgSource(source) },
-                onLongClick = { mainViewModel.removeEpgSource(source) }
-            )
-        }
-        item {
-            Text(
-                if (epgSources.isEmpty()) "Noch keine EPG-Quelle konfiguriert."
-                else "OK = Quelle entfernen",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-            )
-        }
-        item {
-            Text(
-                "Schnell hinzufügen (freie Quellen) — OK fügt hinzu bzw. entfernt wieder:",
-                style = MaterialTheme.typography.bodyMedium
-            )
-        }
-        item {
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                FREE_EPG_SOURCES.forEach { (label, sourceUrl) ->
-                    val active = sourceUrl in epgSources
-                    GroupChip(label, selected = active) {
-                        if (active) {
-                            mainViewModel.removeEpgSource(sourceUrl)
-                        } else {
-                            mainViewModel.addEpgSource(sourceUrl)
-                        }
-                    }
-                }
-            }
-        }
-        item {
-            // FlowRow statt Row: im Hochformat umbrechen, damit „Cache löschen" nicht rechts
-            // aus dem Bild rutscht.
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                TvButton(
-                    text = "Eigene Quelle hinzufügen...",
-                    onClick = { showEpgDialog = true },
-                    containerColor = MaterialTheme.colorScheme.secondaryContainer,
-                    contentColor = MaterialTheme.colorScheme.onSecondaryContainer
-                )
-                TvButton(text = "EPG aktualisieren", onClick = { mainViewModel.refreshEpg() })
-                TvButton(
-                    text = "Cache löschen",
-                    onClick = { mainViewModel.clearEpgCache() },
-                    containerColor = MaterialTheme.colorScheme.errorContainer,
-                    contentColor = MaterialTheme.colorScheme.onErrorContainer
-                )
-            }
-        }
-        if (epgInfo.isNotEmpty()) {
-            item {
-                Text(epgInfo, style = MaterialTheme.typography.bodyMedium)
-            }
-        }
-        item { Spacer(Modifier.height(24.dp)) }
+        item(key = "settings_38") { Spacer(Modifier.height(24.dp)) }
     }
 
-    if (showPlaylistDialog) {
-        PlaylistInputDialog(
-            onConfirm = { name, url -> mainViewModel.addPlaylist(name, url) },
-            onConfirmXtream = { name, server, user, pass -> mainViewModel.addXtreamLogin(name, server, user, pass) },
-            onDismiss = { showPlaylistDialog = false }
+    when (val current = dialog) {
+        is SettingsDialog.PlaylistActions -> {
+            val entry = current.entry
+            val isActive = entry.url == activeUrl
+            ActionsDialog(
+                title = entry.name,
+                subtitle = Http.redact(entry.url),
+                actions = listOf(
+                    DialogAction(if (isActive) "Neu laden" else "Aktivieren und laden") {
+                        mainViewModel.selectPlaylist(entry)
+                        mainViewModel.navigate(NavDestination.LIVE)
+                    },
+                    DialogAction("Entfernen…", destructive = true) {
+                        dialog = SettingsDialog.RemovePlaylist(entry)
+                    }
+                ),
+                onDismiss = { if (dialog == current) dialog = null }
+            )
+        }
+        is SettingsDialog.RemovePlaylist -> ConfirmDialog(
+            title = "Playlist entfernen?",
+            message = "„${current.entry.name}“ wird aus der Liste gelöscht. Zum erneuten Hinzufügen " +
+                "brauchst du die Adresse bzw. die Zugangsdaten.",
+            confirmText = "Entfernen",
+            onConfirm = { mainViewModel.removePlaylist(current.entry) },
+            onDismiss = { dialog = null }
         )
-    }
-    if (showEpgDialog) {
-        SingleTextInputDialog(
+        is SettingsDialog.RemoveEpgSource -> ConfirmDialog(
+            title = "EPG-Quelle entfernen?",
+            message = Http.redact(current.source),
+            confirmText = "Entfernen",
+            onConfirm = { mainViewModel.removeEpgSource(current.source) },
+            onDismiss = { dialog = null }
+        )
+        SettingsDialog.ClearEpgCache -> ConfirmDialog(
+            title = "EPG-Cache löschen?",
+            message = "Das Programm wird beim nächsten Aktualisieren neu heruntergeladen — bei großen " +
+                "Quellen kann das einige Minuten dauern.",
+            confirmText = "Löschen",
+            onConfirm = { mainViewModel.clearEpgCache() },
+            onDismiss = { dialog = null }
+        )
+        SettingsDialog.RemovePin -> ConfirmDialog(
+            title = "Jugendschutz deaktivieren?",
+            message = "Ausgeblendete Kategorien lassen sich danach ohne PIN wieder einblenden.",
+            confirmText = "PIN entfernen",
+            onConfirm = {
+                mainViewModel.setParentalPin("")
+                pinMessage = "Jugendschutz deaktiviert."
+            },
+            onDismiss = { dialog = null }
+        )
+        SettingsDialog.AddEpgSource -> SingleTextInputDialog(
             title = "EPG-Quelle hinzufügen",
             label = "XMLTV-URL (.xml oder .xml.gz)",
+            keyboardType = KeyboardType.Uri,
+            validate = ::validateStreamUrl,
             onConfirm = { url -> mainViewModel.addEpgSource(url) },
-            onDismiss = { showEpgDialog = false }
+            onDismiss = { dialog = null }
         )
-    }
-    when (pinDialog) {
-        "unlock" -> SingleTextInputDialog(
+        SettingsDialog.UnlockPin -> PinDialog(
             title = "Jugendschutz entsperren",
-            label = "PIN",
             confirmText = "Entsperren",
-            isPin = true,
-            onConfirm = { pin ->
-                pinMessage = if (mainViewModel.unlockParental(pin)) "Entsperrt bis zum nächsten App-Start." else "Falsche PIN."
-            },
-            onDismiss = { pinDialog = null }
-        )
-        "set" -> SingleTextInputDialog(
-            title = "Jugendschutz-PIN festlegen",
-            label = "Neue PIN (mind. 4 Ziffern)",
-            confirmText = "Speichern",
-            isPin = true,
-            onConfirm = { pin ->
-                if (pin.length >= 4) {
-                    mainViewModel.setParentalPin(pin)
-                    pinMessage = "PIN gespeichert."
+            confirmTwice = false,
+            onSubmit = { pin ->
+                if (mainViewModel.unlockParental(pin)) {
+                    pinMessage = "Entsperrt bis zum nächsten App-Start."
+                    null
                 } else {
-                    pinMessage = "Die PIN braucht mindestens 4 Ziffern."
+                    "Falsche PIN."
                 }
             },
-            onDismiss = { pinDialog = null }
+            onDismiss = { dialog = null }
         )
+        SettingsDialog.SetPin -> PinDialog(
+            title = "Jugendschutz-PIN festlegen",
+            confirmText = "Speichern",
+            confirmTwice = true,
+            onSubmit = { pin ->
+                if (pin.length < MIN_PIN_LENGTH) {
+                    "Die PIN braucht mindestens $MIN_PIN_LENGTH Ziffern."
+                } else {
+                    mainViewModel.setParentalPin(pin)
+                    pinMessage = "PIN gespeichert."
+                    null
+                }
+            },
+            onDismiss = { dialog = null }
+        )
+        null -> Unit
+    }
+}
+
+/** Hinweistext unter einer Einstellung (auf dem TV gut lesbar: bodySmall 14 sp, gedämpfte Farbe). */
+@Composable
+private fun Hint(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+}
+
+/** An/Aus-Auswahl; FlowRow, damit die Chips im Hochformat umbrechen statt aus dem Bild zu rutschen. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun ToggleRow(label: String, enabled: Boolean, onChange: (Boolean) -> Unit) {
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        itemVerticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(label, style = MaterialTheme.typography.bodyMedium)
+        GroupChip("An", selected = enabled) { onChange(true) }
+        GroupChip("Aus", selected = !enabled) { onChange(false) }
     }
 }
 
@@ -627,6 +676,7 @@ private fun SettingsRow(
     title: String,
     subtitle: String?,
     isSelected: Boolean = false,
+    badge: String? = null,
     onClick: () -> Unit,
     onLongClick: (() -> Unit)? = null
 ) {
@@ -641,13 +691,28 @@ private fun SettingsRow(
             )
             .padding(horizontal = 16.dp, vertical = 12.dp)
     ) {
-        Text(
-            text = title,
-            color = MaterialTheme.colorScheme.onSurface,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            style = MaterialTheme.typography.titleMedium
-        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = title,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.titleMedium,
+                modifier = Modifier.weight(1f, fill = false)
+            )
+            if (badge != null) {
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    text = badge,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onPrimary,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(MaterialTheme.colorScheme.primary)
+                        .padding(horizontal = 8.dp, vertical = 2.dp)
+                )
+            }
+        }
         if (subtitle != null) {
             Text(
                 text = subtitle,

@@ -19,10 +19,14 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Button
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -30,6 +34,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
@@ -38,6 +44,7 @@ import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.zekikoese.ui.LocalIsTv
 import com.zekikoese.ui.tvFocusFrame
+import kotlinx.coroutines.android.awaitFrame
 
 /** Episodenliste einer Serie (nach Staffel/Episode sortiert), komplett D-Pad-bedienbar. */
 @OptIn(ExperimentalFoundationApi::class)
@@ -45,12 +52,22 @@ import com.zekikoese.ui.tvFocusFrame
 fun EpisodesScreen(mainViewModel: MainViewModel) {
     val series by mainViewModel.selectedSeries
     val episodes by mainViewModel.seriesEpisodes
-    val contentInfo by mainViewModel.contentInfo
+    val episodesState by mainViewModel.episodesState
     val resumePositions by mainViewModel.resumePositions
     val favorites by mainViewModel.favorites
 
     val isFavorite = series?.let { mainViewModel.seriesFavKey(it) in favorites } ?: false
     val isTv = LocalIsTv.current
+
+    // TV: Fokus auf die erste Episode, sobald die Liste geladen ist.
+    val firstEpisodeFocus = remember { FocusRequester() }
+    LaunchedEffect(episodes.isNotEmpty()) {
+        if (!isTv || episodes.isEmpty()) return@LaunchedEffect
+        repeat(10) {
+            awaitFrame()
+            if (runCatching { firstEpisodeFocus.requestFocus() }.isSuccess) return@LaunchedEffect
+        }
+    }
 
     // Zurück-Taste schließt die Episodenliste.
     BackHandler { mainViewModel.closeSeries() }
@@ -106,11 +123,13 @@ fun EpisodesScreen(mainViewModel: MainViewModel) {
                 if (series != null) {
                     Spacer(Modifier.height(8.dp))
                     TvButton(
-                        text = if (isFavorite) "★ Favorit" else "☆ Favorit",
+                        text = if (isFavorite) "Favorit" else "Zu Favoriten",
                         onClick = { mainViewModel.toggleSeriesFavorite(series!!) },
                         containerColor = Color.Transparent,
                         contentColor = if (isFavorite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                        borderColor = if (isFavorite) MaterialTheme.colorScheme.primary.copy(alpha = 0.6f) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                        borderColor = if (isFavorite) MaterialTheme.colorScheme.primary.copy(alpha = 0.6f) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                        icon = Icons.Filled.Star,
+                        iconTint = if (isFavorite) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
                     )
                 }
             }
@@ -146,10 +165,22 @@ fun EpisodesScreen(mainViewModel: MainViewModel) {
 
         Box(modifier = Modifier.fillMaxSize()) {
             if (episodes.isEmpty()) {
-                Text(
-                    text = contentInfo.ifEmpty { "Keine Episoden." },
-                    modifier = Modifier.align(Alignment.Center)
-                )
+                when (val state = episodesState) {
+                    is ContentState.Error -> EmptyState(
+                        icon = Icons.Filled.Info,
+                        title = "Episoden nicht verfügbar",
+                        subtitle = state.message,
+                        modifier = Modifier.align(Alignment.TopCenter),
+                        action = { TvButton(text = "Erneut versuchen", onClick = { mainViewModel.retryEpisodes() }) }
+                    )
+                    ContentState.Ready -> EmptyState(
+                        icon = Icons.Filled.Info,
+                        title = "Keine Episoden",
+                        subtitle = "Der Anbieter hat für diese Serie keine Episoden hinterlegt.",
+                        modifier = Modifier.align(Alignment.TopCenter)
+                    )
+                    else -> CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
+                }
             } else {
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
@@ -159,6 +190,7 @@ fun EpisodesScreen(mainViewModel: MainViewModel) {
                         val episodeUrl = mainViewModel.episodeUrl(episode)
                         EpisodeRow(
                             episode = episode,
+                            modifier = if (episode == episodes.first()) Modifier.focusRequester(firstEpisodeFocus) else Modifier,
                             hasResume = episodeUrl != null && (resumePositions[episodeUrl] ?: 0L) > 10_000,
                             onClick = { mainViewModel.playEpisode(episode) }
                         )
@@ -185,10 +217,11 @@ fun EpisodesScreen(mainViewModel: MainViewModel) {
 private fun EpisodeRow(
     episode: SeriesEpisode,
     hasResume: Boolean,
+    modifier: Modifier = Modifier,
     onClick: () -> Unit
 ) {
     Column(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .tvFocusFrame(onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 12.dp)

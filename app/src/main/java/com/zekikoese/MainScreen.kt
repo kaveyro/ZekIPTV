@@ -30,6 +30,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -43,11 +44,14 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -76,6 +80,7 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -190,6 +195,14 @@ fun MainScreen(mainViewModel: MainViewModel = viewModel()) {
         )
     }
 
+    if (mainViewModel.showPlaylistDialog.value) {
+        PlaylistInputDialog(
+            onConfirm = { name, url -> mainViewModel.addPlaylist(name, url) },
+            onConfirmXtream = { name, server, user, pass -> mainViewModel.addXtreamLogin(name, server, user, pass) },
+            onDismiss = { mainViewModel.showPlaylistDialog.value = false }
+        )
+    }
+
     val epgDialogChannel by mainViewModel.epgChannel
     if (epgDialogChannel != null) {
         val channel = epgDialogChannel!!
@@ -274,7 +287,7 @@ private fun SearchScreen(
         if (search.isBlank()) {
             Spacer(Modifier.height(16.dp))
             if (voiceAvailable) {
-                GroupChip("🎤 Sprachsuche", selected = false) {
+                GroupChip("Sprachsuche", selected = false, iconRes = R.drawable.ic_mic) {
                     val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
                         .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
                         .putExtra(RecognizerIntent.EXTRA_PROMPT, "Wonach suchst du?")
@@ -315,7 +328,8 @@ fun EmptyState(
     icon: ImageVector,
     title: String,
     subtitle: String,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    action: (@Composable () -> Unit)? = null
 ) {
     Column(
         modifier = modifier.fillMaxWidth().padding(top = 80.dp),
@@ -342,6 +356,10 @@ fun EmptyState(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(horizontal = 48.dp)
         )
+        if (action != null) {
+            Spacer(Modifier.height(24.dp))
+            action()
+        }
     }
 }
 
@@ -378,9 +396,11 @@ private fun SearchResults(
                     epg = mainViewModel.epgFor(channel),
                     onClick = {
                         mainViewModel.recordSearchQuery()
-                        mainViewModel.selectChannel(channel)
+                        // Aus der Suche heraus wird in der vollständigen Liste gezappt.
+                        mainViewModel.selectChannel(channel, mainViewModel.channelsForGroup(null))
                     },
-                    onLongClick = { onChannelLongPress(channel) }
+                    onLongClick = { onChannelLongPress(channel) },
+                    onMore = { onChannelLongPress(channel) }
                 )
             }
         }
@@ -454,6 +474,7 @@ private fun LiveScreen(
     val allCount by mainViewModel.unhiddenChannelCount
     val selectedGroup by mainViewModel.selectedGroup
     val favorites by mainViewModel.favorites
+    val lastWatchedUrl by mainViewModel.lastWatchedUrl
     val hasChannels = channels.isNotEmpty() || groups.isNotEmpty()
 
     val isTv = LocalIsTv.current
@@ -576,11 +597,25 @@ private fun LiveScreen(
                         }
                         else -> {
                             if (channels.isEmpty()) {
-                                EmptyState(
-                                    icon = Icons.Filled.Info,
-                                    title = "Keine Sender",
-                                    subtitle = if (hasChannels) "In dieser Kategorie gibt es keine Treffer." else "Über das Menü links unter „Einstellungen“ eine Playlist hinzufügen."
-                                )
+                                if (hasChannels || !mainViewModel.startupDone.value) {
+                                    EmptyState(
+                                        icon = Icons.Filled.Info,
+                                        title = "Keine Sender",
+                                        subtitle = "In dieser Kategorie gibt es keine Treffer."
+                                    )
+                                } else {
+                                    EmptyState(
+                                        icon = Icons.Filled.Info,
+                                        title = "Noch keine Sender",
+                                        subtitle = "Füge eine M3U-Playlist oder deinen Xtream-Zugang hinzu.",
+                                        action = {
+                                            TvButton(
+                                                text = "Playlist hinzufügen",
+                                                onClick = { mainViewModel.showPlaylistDialog.value = true }
+                                            )
+                                        }
+                                    )
+                                }
                             } else {
                                 LazyColumn(
                                     state = listState,
@@ -603,11 +638,13 @@ private fun LiveScreen(
                                             isFavorite = channel.url in favorites,
                                             epg = mainViewModel.epgFor(channel),
                                             showGroup = selectedGroup == null,
+                                            isCurrent = channel.url == lastWatchedUrl,
                                             modifier = if (index == targetFocusIndex) {
                                                 Modifier.focusRequester(listFocusRequester)
                                             } else Modifier,
                                             onClick = { mainViewModel.selectChannel(channel) },
                                             onLongClick = { onChannelLongPress(channel) },
+                                            onMore = { onChannelLongPress(channel) },
                                             onFocusChange = { focused ->
                                                 if (focused) {
                                                     focusedIndex = index
@@ -634,7 +671,7 @@ private fun VodContent(mainViewModel: MainViewModel) {
     val categoryCounts by mainViewModel.vodCategoryCounts
     val favCount by mainViewModel.vodFavoriteCount
     val selectedCategory by mainViewModel.selectedVodCategory
-    val contentInfo by mainViewModel.contentInfo
+    val contentState by mainViewModel.vodState
     val favorites by mainViewModel.favorites
 
     val isTv = LocalIsTv.current
@@ -645,8 +682,8 @@ private fun VodContent(mainViewModel: MainViewModel) {
 
     // Pull-to-Refresh (Handy): sichtbar, bis der Katalog neu geladen ist.
     var refreshing by remember { mutableStateOf(false) }
-    LaunchedEffect(contentInfo) {
-        if (!contentInfo.contains("laden", ignoreCase = true)) refreshing = false
+    LaunchedEffect(contentState) {
+        if (contentState !is ContentState.Loading) refreshing = false
     }
 
     LaunchedEffect(pendingFocus, vod.size) {
@@ -702,24 +739,20 @@ private fun VodContent(mainViewModel: MainViewModel) {
                     onRefresh = { refreshing = true; mainViewModel.refreshMovies() }
                 ) {
                     if (vod.isEmpty()) {
-                        if (contentInfo.contains("laden", ignoreCase = true)) {
-                            LazyVerticalGrid(
-                                columns = GridCells.Adaptive(minSize = 150.dp),
-                                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                verticalArrangement = Arrangement.spacedBy(10.dp)
-                            ) {
-                                items(10) {
-                                    Box(modifier = Modifier.fillMaxWidth().aspectRatio(2f/3f).clip(RoundedCornerShape(12.dp))) {
-                                        LoadingPlaceholder()
-                                    }
-                                }
-                            }
-                        } else {
-                            EmptyState(
+                        when (val current = contentState) {
+                            is ContentState.Error -> EmptyState(
+                                icon = Icons.Filled.Info,
+                                title = "Filme nicht verfügbar",
+                                subtitle = current.message,
+                                action = { TvButton(text = "Erneut versuchen", onClick = { mainViewModel.refreshMovies() }) }
+                            )
+                            ContentState.Ready -> EmptyState(
                                 icon = Icons.Filled.Info,
                                 title = "Keine Filme",
-                                subtitle = contentInfo.ifEmpty { "In dieser Kategorie gibt es keine Treffer." }
+                                subtitle = if (allItems.isEmpty()) "Der Anbieter stellt keine Filme bereit." else "In dieser Kategorie gibt es keine Treffer."
                             )
+                            // Platzhalter im selben Raster wie die PosterCards (gleiche Abstände).
+                            else -> PosterGridPlaceholder()
                         }
                     } else {
                         LazyVerticalGrid(
@@ -763,7 +796,7 @@ private fun SeriesContent(mainViewModel: MainViewModel) {
     val categoryCounts by mainViewModel.seriesCategoryCounts
     val favCount by mainViewModel.seriesFavoriteCount
     val selectedCategory by mainViewModel.selectedSeriesCategory
-    val contentInfo by mainViewModel.contentInfo
+    val contentState by mainViewModel.seriesState
     val favorites by mainViewModel.favorites
 
     val isTv = LocalIsTv.current
@@ -774,8 +807,8 @@ private fun SeriesContent(mainViewModel: MainViewModel) {
 
     // Pull-to-Refresh (Handy): sichtbar, bis der Katalog neu geladen ist.
     var refreshing by remember { mutableStateOf(false) }
-    LaunchedEffect(contentInfo) {
-        if (!contentInfo.contains("laden", ignoreCase = true)) refreshing = false
+    LaunchedEffect(contentState) {
+        if (contentState !is ContentState.Loading) refreshing = false
     }
 
     LaunchedEffect(pendingFocus, series.size) {
@@ -831,24 +864,20 @@ private fun SeriesContent(mainViewModel: MainViewModel) {
                     onRefresh = { refreshing = true; mainViewModel.refreshSeries() }
                 ) {
                     if (series.isEmpty()) {
-                        if (contentInfo.contains("laden", ignoreCase = true)) {
-                            LazyVerticalGrid(
-                                columns = GridCells.Adaptive(minSize = 150.dp),
-                                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                verticalArrangement = Arrangement.spacedBy(10.dp)
-                            ) {
-                                items(10) {
-                                    Box(modifier = Modifier.fillMaxWidth().aspectRatio(2f/3f).clip(RoundedCornerShape(12.dp))) {
-                                        LoadingPlaceholder()
-                                    }
-                                }
-                            }
-                        } else {
-                            EmptyState(
+                        when (val current = contentState) {
+                            is ContentState.Error -> EmptyState(
+                                icon = Icons.Filled.Info,
+                                title = "Serien nicht verfügbar",
+                                subtitle = current.message,
+                                action = { TvButton(text = "Erneut versuchen", onClick = { mainViewModel.refreshSeries() }) }
+                            )
+                            ContentState.Ready -> EmptyState(
                                 icon = Icons.Filled.Info,
                                 title = "Keine Serien",
-                                subtitle = contentInfo.ifEmpty { "In dieser Kategorie gibt es keine Treffer." }
+                                subtitle = if (allItems.isEmpty()) "Der Anbieter stellt keine Serien bereit." else "In dieser Kategorie gibt es keine Treffer."
                             )
+                            // Platzhalter im selben Raster wie die PosterCards (gleiche Abstände).
+                            else -> PosterGridPlaceholder()
                         }
                     } else {
                         LazyVerticalGrid(
@@ -879,6 +908,28 @@ private fun SeriesContent(mainViewModel: MainViewModel) {
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+/** Lade-Platzhalter mit denselben Abständen wie das Poster-Raster (kein Layoutsprung). */
+@Composable
+private fun PosterGridPlaceholder() {
+    LazyVerticalGrid(
+        columns = GridCells.Adaptive(minSize = 150.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        items(10) {
+            Box(
+                modifier = Modifier
+                    .padding(16.dp)
+                    .fillMaxWidth()
+                    .aspectRatio(2f / 3f)
+                    .clip(RoundedCornerShape(8.dp))
+            ) {
+                LoadingPlaceholder()
             }
         }
     }
@@ -969,10 +1020,12 @@ internal fun ChannelRow(
     channel: Channel,
     isFavorite: Boolean,
     epg: EpgNowNext,
-    showGroup: Boolean = false,
     modifier: Modifier = Modifier,
+    showGroup: Boolean = false,
+    isCurrent: Boolean = false,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
+    onMore: (() -> Unit)? = null,
     onFocusChange: ((Boolean) -> Unit)? = null
 ) {
     val fg = MaterialTheme.colorScheme.onSurface
@@ -980,23 +1033,46 @@ internal fun ChannelRow(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .tvFocusFrame(onClick = onClick, onLongClick = onLongClick, onFocusChange = onFocusChange)
-            .padding(horizontal = 16.dp, vertical = 14.dp),
+            .tvFocusFrame(
+                onClick = onClick,
+                onLongClick = onLongClick,
+                onFocusChange = onFocusChange,
+                isSelected = isCurrent
+            )
+            .padding(start = 16.dp, end = if (onMore != null && !LocalIsTv.current) 4.dp else 16.dp, top = 14.dp, bottom = 14.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        if (channel.logo != null) {
-            AsyncImage(
-                model = channel.logo,
-                contentDescription = null,
-                modifier = Modifier.size(40.dp).clip(RoundedCornerShape(6.dp))
-            )
-            Spacer(Modifier.width(16.dp))
+        // Feste Logo-Spalte (Initiale als Platzhalter), damit die Namen bündig untereinander stehen.
+        Box(modifier = Modifier.size(40.dp), contentAlignment = Alignment.Center) {
+            if (channel.logo != null) {
+                AsyncImage(
+                    model = channel.logo,
+                    contentDescription = null,
+                    modifier = Modifier.size(40.dp).clip(RoundedCornerShape(6.dp))
+                )
+            } else {
+                Text(
+                    text = channel.name.trim().take(1).uppercase(),
+                    style = MaterialTheme.typography.titleLarge,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f)
+                )
+            }
         }
+        Spacer(Modifier.width(16.dp))
         Column(modifier = Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
+                if (isCurrent) {
+                    Icon(
+                        imageVector = Icons.Filled.PlayArrow,
+                        contentDescription = "Aktueller Sender",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(Modifier.width(4.dp))
+                }
                 Text(
                     text = channel.name,
-                    color = fg,
+                    color = if (isCurrent) MaterialTheme.colorScheme.primary else fg,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     style = MaterialTheme.typography.titleMedium,
@@ -1008,7 +1084,10 @@ internal fun ChannelRow(
                         text = channel.group,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.labelSmall,
-                        modifier = Modifier.alpha(0.6f)
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        // Begrenzt statt gewichtet: sonst bekommt die Gruppe genauso viel Platz wie der Name.
+                        modifier = Modifier.alpha(0.6f).widthIn(max = 140.dp)
                     )
                 }
             }
@@ -1049,6 +1128,16 @@ internal fun ChannelRow(
                 contentDescription = "Favorit",
                 tint = MaterialTheme.colorScheme.tertiary
             )
+        }
+        // Handy: Sender-Aktionen auch ohne Langdruck erreichbar.
+        if (onMore != null && !LocalIsTv.current) {
+            IconButton(onClick = onMore) {
+                Icon(
+                    imageVector = Icons.Filled.MoreVert,
+                    contentDescription = "Sender-Aktionen",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
     }
 }
@@ -1110,6 +1199,7 @@ private fun MediaRow(
 internal fun GroupChip(
     label: String,
     selected: Boolean,
+    iconRes: Int? = null,
     onClick: () -> Unit
 ) {
     Row(
@@ -1130,6 +1220,14 @@ internal fun GroupChip(
                 tint = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.size(18.dp).padding(end = 8.dp)
             )
+        } else if (iconRes != null) {
+            Icon(
+                painter = painterResource(iconRes),
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.size(20.dp)
+            )
+            Spacer(Modifier.width(8.dp))
         }
         Text(
             text = label,
@@ -1149,9 +1247,11 @@ fun TvButton(
     containerColor: Color = MaterialTheme.colorScheme.primary,
     contentColor: Color = MaterialTheme.colorScheme.onPrimary,
     borderColor: Color = Color.Transparent,
-    shape: Shape = RoundedCornerShape(12.dp)
+    shape: Shape = RoundedCornerShape(12.dp),
+    icon: ImageVector? = null,
+    iconTint: Color = contentColor
 ) {
-    Box(
+    Row(
         modifier = modifier
             .tvFocusFrame(
                 onClick = onClick,
@@ -1161,8 +1261,13 @@ fun TvButton(
                 unfocusedBorderWidth = if (borderColor != Color.Transparent) 1.5.dp else 0.dp
             )
             .padding(horizontal = 24.dp, vertical = 12.dp),
-        contentAlignment = Alignment.Center
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.Center
     ) {
+        if (icon != null) {
+            Icon(imageVector = icon, contentDescription = null, tint = iconTint, modifier = Modifier.size(20.dp))
+            Spacer(Modifier.width(8.dp))
+        }
         Text(
             text = text,
             color = contentColor,

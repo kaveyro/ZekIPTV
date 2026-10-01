@@ -2,6 +2,9 @@ package com.zekikoese
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.focusable
+import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,19 +20,37 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.zekikoese.ui.LocalIsTv
+import kotlinx.coroutines.android.awaitFrame
+import kotlinx.coroutines.launch
 
 /** Detail-Seite eines Films: Poster, Metadaten, Beschreibung, Abspielen/Fortsetzen. */
 @OptIn(ExperimentalLayoutApi::class)
@@ -93,6 +114,15 @@ fun VodDetailScreen(mainViewModel: MainViewModel) {
             return@Box
         }
 
+        // TV: Startfokus auf "Abspielen" — sonst verpufft der erste Tastendruck.
+        val playFocus = remember { FocusRequester() }
+        LaunchedEffect(vod.id) {
+            repeat(10) {
+                awaitFrame()
+                if (runCatching { playFocus.requestFocus() }.isSuccess) return@LaunchedEffect
+            }
+        }
+
         Row(modifier = Modifier.fillMaxSize().padding(40.dp)) {
         // Poster
         if (vod.icon != null) {
@@ -136,8 +166,10 @@ fun VodDetailScreen(mainViewModel: MainViewModel) {
             // Aktionen
             Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                 TvButton(
-                    text = if (resumeMs > 10_000) "▶ Fortsetzen (${resumeMs / 60_000} min)" else "▶ Abspielen",
-                    onClick = { mainViewModel.playVod(vod) }
+                    text = if (resumeMs > 10_000) "Fortsetzen (${resumeMs / 60_000} min)" else "Abspielen",
+                    onClick = { mainViewModel.playVod(vod) },
+                    icon = Icons.Filled.PlayArrow,
+                    modifier = Modifier.focusRequester(playFocus)
                 )
 
                 if (resumeMs > 10_000 && vodUrl != null) {
@@ -154,18 +186,53 @@ fun VodDetailScreen(mainViewModel: MainViewModel) {
                 }
 
                 TvButton(
-                    text = if (isFavorite) "★ Favorit" else "☆ Favorit",
+                    text = if (isFavorite) "Favorit" else "Zu Favoriten",
                     onClick = { mainViewModel.toggleVodFavorite(vod) },
                     containerColor = Color.Transparent,
                     contentColor = if (isFavorite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                    borderColor = if (isFavorite) MaterialTheme.colorScheme.primary.copy(alpha = 0.6f) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                    borderColor = if (isFavorite) MaterialTheme.colorScheme.primary.copy(alpha = 0.6f) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                    icon = Icons.Filled.Star,
+                    iconTint = if (isFavorite) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
                 )
             }
 
             Spacer(Modifier.height(20.dp))
 
-            // Beschreibung + Credits (scrollbar bei langen Texten)
-            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+            // Beschreibung + Credits. Auf dem TV fokussierbar, damit lange Texte per HOCH/RUNTER
+            // scrollbar sind (ohne fokussierbares Element erreicht das D-Pad sie nicht).
+            val descScroll = rememberScrollState()
+            val scope = rememberCoroutineScope()
+            var descFocused by remember { mutableStateOf(false) }
+            Column(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(12.dp))
+                    .border(
+                        width = 2.dp,
+                        color = if (descFocused) MaterialTheme.colorScheme.primary else Color.Transparent,
+                        shape = RoundedCornerShape(12.dp)
+                    )
+                    .onFocusChanged { descFocused = it.isFocused }
+                    .onPreviewKeyEvent { event ->
+                        if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                        when {
+                            event.key == Key.DirectionDown && descScroll.canScrollForward -> {
+                                scope.launch { descScroll.animateScrollBy(240f) }
+                                true
+                            }
+                            event.key == Key.DirectionUp && descScroll.canScrollBackward -> {
+                                scope.launch { descScroll.animateScrollBy(-240f) }
+                                true
+                            }
+                            // Oben angekommen: zurück zu den Knöpfen. Die räumliche Fokussuche
+                            // verlässt den scrollbaren Container hier nicht von selbst.
+                            event.key == Key.DirectionUp -> runCatching { playFocus.requestFocus() }.isSuccess
+                            else -> false
+                        }
+                    }
+                    .focusable(enabled = descScroll.maxValue > 0)
+                    .verticalScroll(descScroll)
+                    .padding(12.dp)
+            ) {
                 val plot = info?.plot
                 Text(
                     text = plot ?: "Beschreibung wird geladen…",
@@ -252,8 +319,9 @@ private fun PhoneVodDetailContent(
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             TvButton(
-                text = if (resumeMs > 10_000) "▶ Fortsetzen (${resumeMs / 60_000} min)" else "▶ Abspielen",
-                onClick = { mainViewModel.playVod(vod) }
+                text = if (resumeMs > 10_000) "Fortsetzen (${resumeMs / 60_000} min)" else "Abspielen",
+                onClick = { mainViewModel.playVod(vod) },
+                icon = Icons.Filled.PlayArrow
             )
 
             if (resumeMs > 10_000 && vodUrl != null) {
@@ -270,11 +338,13 @@ private fun PhoneVodDetailContent(
             }
 
             TvButton(
-                text = if (isFavorite) "★ Favorit" else "☆ Favorit",
+                text = if (isFavorite) "Favorit" else "Zu Favoriten",
                 onClick = { mainViewModel.toggleVodFavorite(vod) },
                 containerColor = Color.Transparent,
                 contentColor = if (isFavorite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                borderColor = if (isFavorite) MaterialTheme.colorScheme.primary.copy(alpha = 0.6f) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                borderColor = if (isFavorite) MaterialTheme.colorScheme.primary.copy(alpha = 0.6f) else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                icon = Icons.Filled.Star,
+                iconTint = if (isFavorite) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
             )
         }
 

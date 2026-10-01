@@ -62,6 +62,8 @@ fun HomeScreen(
     val hasChannels = mainViewModel.groups.value.isNotEmpty() || mainViewModel.visibleChannels.value.isNotEmpty()
 
     val hasRows = continueWatching.isNotEmpty() || recentChannels.isNotEmpty() || favoriteChannels.isNotEmpty()
+    // Echter Leerzustand erst nach dem Laden der gespeicherten Sender (sonst kurzes Aufblitzen).
+    val noPlaylist = mainViewModel.startupDone.value && !hasChannels
 
     // Beim App-Start (und nach Rückkehr zu Home) den Fokus auf die erste Karte setzen,
     // statt ihn auf der Navigations-Rail zu lassen. Nur auf dem TV — programmatischer
@@ -69,15 +71,22 @@ fun HomeScreen(
     val isTv = LocalIsTv.current
     val pendingHomeFocus by mainViewModel.pendingHomeFocus
     val firstCardFocus = remember { FocusRequester() }
-    LaunchedEffect(pendingHomeFocus, hasRows) {
-        if (!pendingHomeFocus || !hasRows) return@LaunchedEffect
+    val addPlaylistFocus = remember { FocusRequester() }
+    LaunchedEffect(pendingHomeFocus, hasRows, noPlaylist) {
+        if (!pendingHomeFocus) return@LaunchedEffect
+        // Ohne Inhalt: Fokus auf "Playlist hinzufügen" (sonst bliebe er auf der Rail).
+        val target = when {
+            hasRows -> firstCardFocus
+            noPlaylist -> addPlaylistFocus
+            else -> return@LaunchedEffect
+        }
         if (!isTv) {
             mainViewModel.pendingHomeFocus.value = false
             return@LaunchedEffect
         }
         repeat(10) {
             awaitFrame()
-            if (runCatching { firstCardFocus.requestFocus() }.isSuccess) {
+            if (runCatching { target.requestFocus() }.isSuccess) {
                 mainViewModel.pendingHomeFocus.value = false
                 return@LaunchedEffect
             }
@@ -107,10 +116,19 @@ fun HomeScreen(
             EmptyState(
                 icon = Icons.Filled.Home,
                 title = "Willkommen bei ZekIPTV",
-                subtitle = if (hasChannels) {
+                subtitle = if (!noPlaylist) {
                     "Gesehene Sender, Favoriten und angefangene Filme erscheinen hier."
                 } else {
-                    "Gehe zu den Einstellungen, um deine erste Playlist hinzuzufügen."
+                    "Füge deine erste Playlist hinzu — als M3U-Adresse oder mit deinem Xtream-Zugang."
+                },
+                action = if (!noPlaylist) null else {
+                    {
+                        TvButton(
+                            text = "Playlist hinzufügen",
+                            onClick = { mainViewModel.showPlaylistDialog.value = true },
+                            modifier = Modifier.focusRequester(addPlaylistFocus)
+                        )
+                    }
                 }
             )
             return@Column
@@ -143,7 +161,8 @@ fun HomeScreen(
                         modifier = if (index == 0 && continueWatching.isEmpty()) {
                             Modifier.focusRequester(firstCardFocus)
                         } else Modifier,
-                        onClick = { mainViewModel.selectChannel(channel) },
+                        // Aus den Favoriten heraus wird innerhalb der Favoriten gezappt.
+                        onClick = { mainViewModel.selectChannel(channel, favoriteChannels) },
                         onLongClick = { onChannelLongPress(channel) },
                         onFocusChange = { focused ->
                             if (focused) {
@@ -170,8 +189,10 @@ fun HomeScreen(
                         modifier = if (index == 0 && continueWatching.isEmpty() && favoriteChannels.isEmpty()) {
                             Modifier.focusRequester(firstCardFocus)
                         } else Modifier,
-                        onClick = { mainViewModel.selectChannel(channel) },
+                        // Zappen in der vollständigen Liste (die Verlaufsliste ändert sich beim Zappen).
+                        onClick = { mainViewModel.selectChannel(channel, mainViewModel.channelsForGroup(null)) },
                         onLongClick = { onChannelLongPress(channel) },
+                        onMore = { onChannelLongPress(channel) },
                         onFocusChange = { focused ->
                             if (focused) {
                                 focusedChannel = channel

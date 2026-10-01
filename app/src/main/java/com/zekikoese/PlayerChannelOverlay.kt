@@ -147,11 +147,14 @@ fun PlayerChannelOverlay(
                         channel = channel,
                         isFavorite = channel.url in favorites,
                         epg = mainViewModel.epgFor(channel),
+                        // Laufenden Sender markieren — der Fokus allein geht beim Scrollen verloren.
+                        isCurrent = channel.url == currentUrl,
                         modifier = if (index == focusTarget) {
                             Modifier.focusRequester(rowFocusRequester)
                         } else Modifier,
                         onClick = {
-                            mainViewModel.selectChannel(channel)
+                            // Danach innerhalb der im Overlay gewählten Kategorie zappen.
+                            mainViewModel.selectChannel(channel, channels)
                             onDismiss()
                         },
                         onLongClick = {},

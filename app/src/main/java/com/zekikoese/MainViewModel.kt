@@ -113,7 +113,20 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val selectedSeriesCategory = mutableStateOf<String?>(null)
     val selectedSeries = mutableStateOf<SeriesItem?>(null)
     val seriesEpisodes = mutableStateOf<List<SeriesEpisode>>(emptyList())
-    val contentInfo = mutableStateOf("") // Lade-/Fehlerstatus für Filme/Serien
+    // Ladezustände der Anbieter-Kataloge — getrennt, damit ein Fehler nicht im falschen Bereich erscheint.
+    val vodState = mutableStateOf<ContentState>(ContentState.Idle)
+    val seriesState = mutableStateOf<ContentState>(ContentState.Idle)
+    val episodesState = mutableStateOf<ContentState>(ContentState.Idle)
+
+    // Kurze Rückmeldungen (Snackbar), z. B. nach dem Umschalten eines Favoriten.
+    val message = mutableStateOf<UiMessage?>(null)
+
+    // Dialog "Playlist hinzufügen" — auch aus den Leerzuständen von Home/Live-TV erreichbar.
+    val showPlaylistDialog = mutableStateOf(false)
+
+    // true, sobald gespeicherte Playlists/Sender geladen sind. Vorher ist "keine Sender" kein
+    // echter Leerzustand — sonst blitzt kurz "Playlist hinzufügen" auf und zieht den TV-Fokus.
+    val startupDone = mutableStateOf(false)
 
     // Xtream-Konto (Ablaufdatum, Verbindungen) und Catch-up-Archiv (Stream-ID -> Tage).
     val accountInfo = mutableStateOf<XtreamAccountInfo?>(null)
@@ -130,6 +143,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     // Sender-Rücksprung ("letzter Sender")
     private var previousChannel: Channel? = null
+
+    // Liste, aus der die Wiedergabe gestartet wurde (Live-Kategorie, Favoriten, Overlay …) —
+    // darin wird gezappt, unabhängig davon, welche Kategorie im Live-Bereich gewählt ist.
+    private var zapList: List<Channel> = emptyList()
 
     // Backup-Status für die Einstellungen
     val backupInfo = mutableStateOf("")
@@ -237,6 +254,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             .filter { query.isEmpty() || it.name.contains(query, ignoreCase = true) }
             .toList()
     }
+
+    /** Feste Sendernummern nach der Reihenfolge unter "Alle" (für Info-Leiste und Direktwahl). */
+    private val channelNumbers: State<Map<String, Int>> = derivedStateOf {
+        channelNumberIndex(channelsForGroup(null))
+    }
+
+    fun channelNumberOf(channel: Channel): Int? = channelNumbers.value[channel.url]
+
+    /** Zuletzt gesehener Sender — wird in der Live-Liste markiert. */
+    val lastWatchedUrl: State<String?> = derivedStateOf { recentChannelUrls.value.firstOrNull() }
 
     /** Nach Kategorie gefilterte Filme (FAV_CATEGORY = nur Favoriten). */
     val visibleVod: State<List<VodItem>> = derivedStateOf {
@@ -376,6 +403,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 checkXtreamSuggestion(url.value, saved)
                 requestLocalNetworkIfNeeded(streamSample(saved) + epgSources.value)
             }
+            startupDone.value = true
 
             // EPG: erst aus dem Datei-Cache, nur bei veraltetem/fehlendem Cache neu laden.
             val cached = repository.loadEpgCache(EPG_CACHE_MAX_AGE_MS)
@@ -390,7 +418,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             // Autostart: zuletzt gesehenen Sender direkt abspielen.
             if (autoplayLast.value && saved.isNotEmpty()) {
                 val last = repository.lastChannelFlow.first()
-                allChannels.value.find { it.url == last }?.let(::selectChannel)
+                allChannels.value.find { it.url == last }?.let { selectChannel(it) }
             }
         }
         // Favoriten laufend beobachten. Verschwindet die Favoriten-Pseudogruppe (kein
@@ -644,6 +672,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { repository.saveXtreamLink(playlistUrl, null) }
         vodItems.value = emptyList()
         seriesItems.value = emptyList()
+        vodState.value = ContentState.Idle
+        seriesState.value = ContentState.Idle
         setupXtream(playlistUrl, autoAddEpg = false)
         // Umwandlung wieder anbieten (in den Einstellungen, ohne Dialog).
         checkXtreamSuggestion(playlistUrl, allChannels.value, showDialog = false)
@@ -816,7 +846,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private fun loadVod() {
         val api = xtream ?: return
         if (vodJob?.isActive == true) return
-        contentInfo.value = "Filme werden geladen…"
+        vodState.value = ContentState.Loading
         vodJob = viewModelScope.launch {
             runCatching {
                 withContext(Dispatchers.IO) { api.getVodCategories() to api.getVodStreams() }
@@ -824,9 +854,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 onSuccess = { (categories, items) ->
                     vodCategories.value = categories
                     vodItems.value = items
-                    contentInfo.value = if (items.isEmpty()) "Keine Filme gefunden." else ""
+                    vodState.value = ContentState.Ready
                 },
-                onFailure = { contentInfo.value = "Filme laden fehlgeschlagen: ${it.message}" }
+                onFailure = {
+                    val message = "Filme konnten nicht geladen werden: ${it.message}"
+                    vodState.value = ContentState.Error(message)
+                    // Beim Aktualisieren bleibt der alte Katalog sichtbar — Fehler trotzdem melden.
+                    if (vodItems.value.isNotEmpty()) showMessage(message)
+                }
             )
         }
     }
@@ -834,7 +869,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private fun loadSeries() {
         val api = xtream ?: return
         if (seriesJob?.isActive == true) return
-        contentInfo.value = "Serien werden geladen…"
+        seriesState.value = ContentState.Loading
         seriesJob = viewModelScope.launch {
             runCatching {
                 withContext(Dispatchers.IO) { api.getSeriesCategories() to api.getSeries() }
@@ -842,9 +877,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 onSuccess = { (categories, items) ->
                     seriesCategories.value = categories
                     seriesItems.value = items
-                    contentInfo.value = if (items.isEmpty()) "Keine Serien gefunden." else ""
+                    seriesState.value = ContentState.Ready
                 },
-                onFailure = { contentInfo.value = "Serien laden fehlgeschlagen: ${it.message}" }
+                onFailure = {
+                    val message = "Serien konnten nicht geladen werden: ${it.message}"
+                    seriesState.value = ContentState.Error(message)
+                    if (seriesItems.value.isNotEmpty()) showMessage(message)
+                }
             )
         }
     }
@@ -889,17 +928,27 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         selectedSeries.value = series
         seriesEpisodes.value = emptyList()
         val api = xtream ?: return
-        contentInfo.value = "Episoden werden geladen…"
+        episodesState.value = ContentState.Loading
         viewModelScope.launch {
             runCatching { withContext(Dispatchers.IO) { api.getSeriesEpisodes(series.id) } }
                 .fold(
                     onSuccess = {
+                        // Inzwischen eine andere Serie geöffnet? Dann das Ergebnis verwerfen.
+                        if (selectedSeries.value?.id != series.id) return@fold
                         seriesEpisodes.value = it
-                        contentInfo.value = if (it.isEmpty()) "Keine Episoden gefunden." else ""
+                        episodesState.value = ContentState.Ready
                     },
-                    onFailure = { contentInfo.value = "Episoden laden fehlgeschlagen: ${it.message}" }
+                    onFailure = {
+                        if (selectedSeries.value?.id != series.id) return@fold
+                        episodesState.value = ContentState.Error("Episoden konnten nicht geladen werden: ${it.message}")
+                    }
                 )
         }
+    }
+
+    /** Episodenliste nach einem Fehler erneut laden. */
+    fun retryEpisodes() {
+        selectedSeries.value?.let(::openSeries)
     }
 
     fun closeSeries() {
@@ -996,6 +1045,27 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val updated = playlists.value - entry
         playlists.value = updated
         viewModelScope.launch { repository.savePlaylists(updated) }
+        // Aktive Playlist entfernt: auf die nächste umschalten bzw. die Senderliste leeren —
+        // sonst blieben ihre Sender stehen und die URL zeigte auf eine gelöschte Playlist.
+        if (entry.url == url.value) {
+            val next = updated.firstOrNull()
+            if (next != null) {
+                selectPlaylist(next)
+            } else {
+                stopPlayback()
+                url.value = ""
+                allChannels.value = emptyList()
+                selectedGroup.value = null
+                uiState.value = PlaylistUiState.Idle
+                setupXtream("", autoAddEpg = false)
+                xtreamSuggestion.value = null
+                viewModelScope.launch {
+                    repository.saveUrl("")
+                    repository.saveChannels(emptyList())
+                }
+            }
+        }
+        showMessage("Playlist „${entry.name}“ entfernt.")
     }
 
     fun selectPlaylist(entry: PlaylistEntry) {
@@ -1146,6 +1216,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                         // Filme/Serien der alten Playlist verwerfen; Xtream neu erkennen.
                         vodItems.value = emptyList()
                         seriesItems.value = emptyList()
+                        vodState.value = ContentState.Idle
+                        seriesState.value = ContentState.Idle
                         selectedVodCategory.value = null
                         selectedSeriesCategory.value = null
                         setupXtream(target, autoAddEpg = true)
@@ -1164,8 +1236,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun selectChannel(channel: Channel) {
-        lastFocusedIndex = visibleChannels.value.indexOf(channel).coerceAtLeast(0)
+    /**
+     * Startet einen Sender. [zapContext] = Liste, in der danach gezappt wird (Standard: die
+     * aktuelle Live-Liste); Zappen, Direktwahl und Rücksprung behalten die bisherige Liste.
+     */
+    fun selectChannel(channel: Channel, zapContext: List<Channel>? = null) {
+        zapList = zapContext ?: visibleChannels.value
+        startChannel(channel)
+    }
+
+    private fun startChannel(channel: Channel) {
+        visibleChannels.value.indexOf(channel).takeIf { it >= 0 }?.let { lastFocusedIndex = it }
         // Für den Sender-Rücksprung den bisher laufenden Sender merken.
         selectedChannel.value?.takeIf { it.url != channel.url }?.let { previousChannel = it }
         selectedChannel.value = channel
@@ -1175,16 +1256,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Direktwahl per Zifferntasten: Nummer = Position in der aktuellen Senderliste (1-basiert). */
+    /** Direktwahl per Zifferntasten: feste Nummer = Position unter "Alle" (1-basiert). */
     fun jumpToChannelNumber(number: Int): Boolean {
-        val channel = visibleChannels.value.getOrNull(number - 1) ?: return false
-        selectChannel(channel)
+        val channel = channelsForGroup(null).getOrNull(number - 1) ?: return false
+        startChannel(channel)
         return true
     }
 
     /** Springt zum zuvor gesehenen Sender zurück (klassische "letzter Sender"-Taste). */
     fun swapToPreviousChannel() {
-        previousChannel?.let(::selectChannel)
+        previousChannel?.let(::startChannel)
     }
 
     fun deselectChannel() {
@@ -1194,17 +1275,26 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Zappt vom aktuellen Sender aus um [delta] weiter (+1 = nächster, -1 = vorheriger). */
     fun zapChannel(delta: Int) {
         if (playingMedia.value != null) return // kein Zapping in VOD/Serien
-        val list = visibleChannels.value
-        if (list.isEmpty()) return
-        val current = selectedChannel.value
-        val currentIndex = list.indexOf(current).takeIf { it >= 0 }
-            ?: lastFocusedIndex.coerceIn(0, list.lastIndex)
-        val next = list[(currentIndex + delta).mod(list.size)]
-        selectChannel(next)
+        val list = zapList.ifEmpty { visibleChannels.value }
+        val next = zapTarget(list, selectedChannel.value?.url, lastFocusedIndex, delta) ?: return
+        startChannel(next)
     }
 
-    fun toggleFavorite(channel: Channel) {
-        viewModelScope.launch { repository.toggleFavorite(channel.url) }
+    fun toggleFavorite(channel: Channel) = toggleFavoriteKey(channel.url, channel.name)
+
+    /** Favorit umschalten und mit "Rückgängig" bestätigen (Langdruck gibt sonst keine Rückmeldung). */
+    private fun toggleFavoriteKey(key: String, title: String) {
+        val wasFavorite = key in favorites.value
+        viewModelScope.launch { repository.toggleFavorite(key) }
+        showMessage(
+            text = if (wasFavorite) "„$title“ aus den Favoriten entfernt" else "„$title“ zu den Favoriten hinzugefügt",
+            actionLabel = "Rückgängig",
+            action = { viewModelScope.launch { repository.toggleFavorite(key) } }
+        )
+    }
+
+    fun showMessage(text: String, actionLabel: String? = null, action: (() -> Unit)? = null) {
+        message.value = UiMessage(text, actionLabel, action)
     }
 
     // ---------- Favoriten für Filme/Serien (gleicher Favoriten-Speicher, eigene Keys) ----------
@@ -1213,13 +1303,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun seriesFavKey(item: SeriesItem): String = "series:${item.id}"
 
-    fun toggleVodFavorite(item: VodItem) {
-        viewModelScope.launch { repository.toggleFavorite(vodFavKey(item)) }
-    }
+    fun toggleVodFavorite(item: VodItem) = toggleFavoriteKey(vodFavKey(item), item.name)
 
-    fun toggleSeriesFavorite(item: SeriesItem) {
-        viewModelScope.launch { repository.toggleFavorite(seriesFavKey(item)) }
-    }
+    fun toggleSeriesFavorite(item: SeriesItem) = toggleFavoriteKey(seriesFavKey(item), item.name)
 
     // ---------- Programmführer ----------
 

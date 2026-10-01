@@ -11,12 +11,14 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
@@ -30,7 +32,8 @@ import com.zekikoese.ui.theme.AccentGlow
 /**
  * Einheitlicher D-Pad-Fokusrahmen für alle fokussierbaren Elemente:
  * animierte Skalierung + Glow-Rahmen + Akzent-Tönung des Hintergrunds.
- * Die Tönung (statt Vollfarbe) lässt alle Textfarben unverändert.
+ * Die Tönung (statt Vollfarbe) lässt alle Textfarben unverändert. Auf Touch-Geräten kommt ein
+ * Ripple beim Antippen dazu.
  *
  * Skalierung: volle Breite (Zeilen) ~1.015f, Poster/Karten ~1.05f.
  */
@@ -49,6 +52,8 @@ fun Modifier.tvFocusFrame(
     unfocusedBorderWidth: Dp = 0.dp
 ): Modifier {
     var focused by remember { mutableStateOf(false) }
+    // Touch: sichtbare Rückmeldung beim Antippen (Ripple). TV: keine — dort zeigt der Fokusrahmen alles.
+    val isTv = LocalIsTv.current
     val interactionSource = remember { MutableInteractionSource() }
 
     val scale by animateFloatAsState(
@@ -83,6 +88,8 @@ fun Modifier.tvFocusFrame(
             scaleY = scale
         }
         // Shadow entfernt: verursachte dunkle Artefakte bei (halb-)transparenten Buttons.
+        // Ripple auf die Form begrenzen (sonst eckig über abgerundeten Kacheln).
+        .then(if (isTv) Modifier else Modifier.clip(shape))
         .onFocusChanged {
             focused = it.isFocused
             onFocusChange?.invoke(it.isFocused)
@@ -91,7 +98,8 @@ fun Modifier.tvFocusFrame(
             onClick = onClick,
             onLongClick = onLongClick,
             interactionSource = interactionSource,
-            indication = null // Deaktiviert das dunkle System-Overlay/Rechteck
+            // TV: kein System-Overlay (dunkles Rechteck über dem Fokusrahmen).
+            indication = if (isTv) null else ripple()
         )
         .background(background, shape)
         .border(
