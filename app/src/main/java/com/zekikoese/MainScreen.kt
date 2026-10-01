@@ -42,6 +42,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.MoreVert
@@ -107,6 +108,7 @@ fun MainScreen(mainViewModel: MainViewModel = viewModel()) {
     val favorites by mainViewModel.favorites
 
     var actionsChannel by remember { mutableStateOf<Channel?>(null) }
+    val isTvUi = LocalIsTv.current
 
     BackHandler(enabled = destination != NavDestination.HOME) {
         when {
@@ -118,6 +120,9 @@ fun MainScreen(mainViewModel: MainViewModel = viewModel()) {
                 mainViewModel.selectSeriesCategory(null)
             destination == NavDestination.SEARCH && search.isNotEmpty() ->
                 mainViewModel.onSearchChange("")
+            // Handy: der TV-Guide wird aus Live-TV geöffnet — Zurück führt dorthin.
+            destination == NavDestination.GUIDE && !isTvUi ->
+                mainViewModel.navigate(NavDestination.LIVE)
             else -> mainViewModel.navigate(NavDestination.HOME)
         }
     }
@@ -132,6 +137,7 @@ fun MainScreen(mainViewModel: MainViewModel = viewModel()) {
                 NavDestination.SEARCH -> SearchScreen(mainViewModel) { actionsChannel = it }
                 NavDestination.HOME -> HomeScreen(mainViewModel) { actionsChannel = it }
                 NavDestination.LIVE -> LiveScreen(mainViewModel) { actionsChannel = it }
+                NavDestination.GUIDE -> GuideScreen(mainViewModel)
                 NavDestination.MOVIES -> VodContent(mainViewModel)
                 NavDestination.SERIES -> SeriesContent(mainViewModel)
                 NavDestination.SETTINGS -> SettingsScreen(mainViewModel)
@@ -139,7 +145,12 @@ fun MainScreen(mainViewModel: MainViewModel = viewModel()) {
         }
     }
 
-    if (LocalIsTv.current) {
+    // Erststart ohne Playlist: Assistent statt leerer Oberfläche.
+    val showWelcome = mainViewModel.startupDone.value && mainViewModel.playlists.value.isEmpty() &&
+        !mainViewModel.welcomeDismissed.value
+    if (showWelcome) {
+        WelcomeScreen(mainViewModel)
+    } else if (isTvUi) {
         Box(modifier = Modifier.fillMaxSize()) {
             Box(modifier = Modifier.fillMaxSize().padding(start = 72.dp)) {
                 mainContent()
@@ -199,7 +210,11 @@ fun MainScreen(mainViewModel: MainViewModel = viewModel()) {
         PlaylistInputDialog(
             onConfirm = { name, url -> mainViewModel.addPlaylist(name, url) },
             onConfirmXtream = { name, server, user, pass -> mainViewModel.addXtreamLogin(name, server, user, pass) },
-            onDismiss = { mainViewModel.showPlaylistDialog.value = false }
+            onDismiss = {
+                mainViewModel.showPlaylistDialog.value = false
+                mainViewModel.playlistDialogXtream.value = false
+            },
+            initialXtream = mainViewModel.playlistDialogXtream.value
         )
     }
 
@@ -521,7 +536,24 @@ private fun LiveScreen(
     }
 
     Column(modifier = Modifier.fillMaxSize().padding(start = 16.dp, end = 32.dp, top = 24.dp, bottom = 24.dp)) {
-        ScreenTitle("Live-TV")
+        if (isTv) {
+            ScreenTitle("Live-TV")
+        } else {
+            // Handy: der TV-Guide hat keinen Platz in der unteren Leiste — Einstieg hier.
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                Box(modifier = Modifier.weight(1f)) { ScreenTitle("Live-TV") }
+                if (hasChannels) {
+                    TvButton(
+                        text = "TV-Guide",
+                        onClick = { mainViewModel.navigate(NavDestination.GUIDE) },
+                        modifier = Modifier.padding(bottom = 16.dp),
+                        containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+                        icon = Icons.Filled.DateRange
+                    )
+                }
+            }
+        }
 
         if (!isTv && groups.isNotEmpty()) {
             PhoneCategoryPicker(

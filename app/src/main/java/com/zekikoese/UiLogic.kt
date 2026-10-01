@@ -115,3 +115,41 @@ internal fun audioTrackLabel(
     )
     return (listOf(head) + details).joinToString(" · ")
 }
+
+// ---------- TV-Guide (EPG-Raster) ----------
+
+internal const val HALF_HOUR_MS = 30 * 60_000L
+
+/** Auf die volle bzw. halbe Stunde abrunden (Raster des TV-Guides). */
+internal fun floorToHalfHour(ms: Long): Long = ms - Math.floorMod(ms, HALF_HOUR_MS)
+
+/** Auf die nächste volle bzw. halbe Stunde aufrunden. */
+internal fun ceilToHalfHour(ms: Long): Long = floorToHalfHour(ms + HALF_HOUR_MS - 1)
+
+/** Sendungen, die sich mit dem Zeitraum [from, to) überschneiden. */
+internal fun programmesInRange(programmes: List<EpgProgramme>, from: Long, to: Long): List<EpgProgramme> =
+    programmes.filter { it.stopMs > from && it.startMs < to }
+
+/**
+ * Linker Rand des sichtbaren Zeitfensters (Breite [spanMs]), nachdem die Sendung
+ * [cellStart, cellStop) fokussiert wurde: unverändert, solange sie ganz sichtbar ist oder das
+ * Fenster überdeckt; sonst so verschoben, dass ihr Anfang (und möglichst ihr Ende) sichtbar wird.
+ * Begrenzt auf den geladenen Bereich [rangeStart, rangeEnd].
+ */
+internal fun guideWindowFor(
+    windowStart: Long,
+    spanMs: Long,
+    cellStart: Long,
+    cellStop: Long,
+    rangeStart: Long,
+    rangeEnd: Long
+): Long {
+    val windowEnd = windowStart + spanMs
+    val target = when {
+        cellStart >= windowStart && cellStop <= windowEnd -> windowStart
+        cellStart <= windowStart && cellStop >= windowEnd -> windowStart
+        cellStart < windowStart -> floorToHalfHour(cellStart)
+        else -> minOf(ceilToHalfHour(cellStop - spanMs), floorToHalfHour(cellStart))
+    }
+    return target.coerceIn(rangeStart, (rangeEnd - spanMs).coerceAtLeast(rangeStart))
+}

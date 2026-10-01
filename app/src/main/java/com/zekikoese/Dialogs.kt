@@ -240,11 +240,12 @@ fun ActionsDialog(
 fun PlaylistInputDialog(
     onConfirm: (name: String, url: String) -> Unit,
     onConfirmXtream: (name: String, server: String, username: String, password: String) -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    initialXtream: Boolean = false
 ) {
     var name by remember { mutableStateOf("") }
     var url by remember { mutableStateOf("") }
-    var xtreamMode by remember { mutableStateOf(false) }
+    var xtreamMode by remember { mutableStateOf(initialXtream) }
     var server by remember { mutableStateOf("") }
     var username by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
@@ -532,6 +533,33 @@ fun PinDialog(
 }
 
 internal const val MIN_PIN_LENGTH = 4
+
+/** Kategorie-Auswahl als Dialog (TV-Guide): eine Zeile je Kategorie mit Senderanzahl. */
+@Composable
+fun CategoryPickerDialog(
+    entries: List<CategoryEntry>,
+    selectedKey: String?,
+    onSelect: (String?) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val selectedFocus = remember { FocusRequester() }
+    DialogFrame(onDismiss = onDismiss, tvWidth = 460) {
+        DialogTitle("Kategorie")
+        LazyColumn(modifier = Modifier.heightIn(max = if (LocalIsTv.current) 520.dp else 440.dp)) {
+            items(entries) { entry ->
+                val selected = entry.key == selectedKey
+                DialogRow(
+                    label = entry.label + (entry.count?.let { "  ($it)" } ?: ""),
+                    highlighted = selected,
+                    modifier = if (selected) Modifier.focusRequester(selectedFocus) else Modifier,
+                    onClick = { onSelect(entry.key); onDismiss() }
+                )
+            }
+        }
+        DialogRow("Schließen", onClick = onDismiss)
+    }
+    if (LocalIsTv.current) RequestInitialFocus(selectedFocus)
+}
 
 /** Lang-Druck-Menü eines Senders: Tagesprogramm und Favoriten-Toggle. */
 @Composable

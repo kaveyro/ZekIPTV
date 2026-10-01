@@ -56,6 +56,7 @@ fun NavRail(
         add(RailEntry(NavDestination.SEARCH, "Suche", R.drawable.ic_nav_search))
         add(RailEntry(NavDestination.HOME, "Home", R.drawable.ic_nav_home))
         add(RailEntry(NavDestination.LIVE, "Live-TV", R.drawable.ic_nav_live))
+        add(RailEntry(NavDestination.GUIDE, "TV-Guide", R.drawable.ic_nav_guide))
         if (xtreamAvailable) {
             add(RailEntry(NavDestination.MOVIES, "Filme", R.drawable.ic_nav_movies))
             add(RailEntry(NavDestination.SERIES, "Serien", R.drawable.ic_nav_series))

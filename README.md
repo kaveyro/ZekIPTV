@@ -12,6 +12,9 @@ A modern Android IPTV player built with Kotlin and Jetpack Compose, optimized fo
 - **Timeshift**: Pause and rewind live TV (local recording, up to 30 min) — uses a single
   connection, so it also works with accounts limited to one stream
 - **XMLTV EPG Integration**: Electronic Program Guide support for channel scheduling
+- **TV-Guide**: EPG grid (channels × timeline) with D-pad navigation, swipe on phones and
+  catch-up straight from the grid
+- **First-start assistant**: M3U, Xtream login or backup import instead of an empty start screen
 - **HLS Streaming**: Full support for HLS streams (.m3u8) via Media3/ExoPlayer
 - **Player**: Aspect ratio modes, numeric channel input, audio/subtitle tracks, sleep timer,
   media session (remote media keys), picture-in-picture on phones, automatic frame rate
@@ -130,6 +133,7 @@ It bundles the [Jellyfin Media3 FFmpeg decoder](https://github.com/jellyfin/jell
 
 ## Version History
 
+- **1.10.0**: TV-Guide (EPG grid with catch-up) and first-start assistant
 - **1.9.1**: Usability and design pass — catalog loading errors with retry instead of endless
   placeholders, confirmation before deleting playlists/EPG sources, validated input dialogs,
   PIN errors shown in the dialog, touch ripple and ⋮ channel actions on phones, readable playback

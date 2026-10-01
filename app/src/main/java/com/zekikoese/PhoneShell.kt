@@ -99,7 +99,9 @@ fun PhoneMainScreen(
             NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
                 entries.forEach { entry ->
                     NavigationBarItem(
-                        selected = destination == entry.dest,
+                        // Der TV-Guide hängt am Live-Bereich (eigener Eintrag hätte keinen Platz mehr).
+                        selected = destination == entry.dest ||
+                            (entry.dest == NavDestination.LIVE && destination == NavDestination.GUIDE),
                         onClick = { mainViewModel.navigate(entry.dest) },
                         icon = {
                             Icon(

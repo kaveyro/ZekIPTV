@@ -77,3 +77,47 @@ class UiLogicTest {
         assertEquals("Spur 3", audioTrackLabel(null, "und", null, 0, 2))
     }
 }
+
+class GuideLogicTest {
+
+    private val h = 60 * 60_000L
+    private val m = 60_000L
+    private val base = 1_700_000_000_000L - Math.floorMod(1_700_000_000_000L, 30 * m) // volle halbe Stunde
+
+    @Test
+    fun roundsToHalfHours() {
+        assertEquals(base, floorToHalfHour(base + 29 * m))
+        assertEquals(base + 30 * m, ceilToHalfHour(base + 1))
+        assertEquals(base, ceilToHalfHour(base))
+    }
+
+    @Test
+    fun filtersOverlappingProgrammes() {
+        val list = listOf(
+            EpgProgramme("x", base - h, base, "vorher"),
+            EpgProgramme("x", base - 10 * m, base + 20 * m, "läuft rein"),
+            EpgProgramme("x", base + h, base + 2 * h, "drin"),
+            EpgProgramme("x", base + 3 * h, base + 4 * h, "danach")
+        )
+        assertEquals(listOf("läuft rein", "drin"), programmesInRange(list, base, base + 3 * h).map { it.title })
+    }
+
+    @Test
+    fun windowOnlyMovesWhenCellIsCut() {
+        val range = base - 3 * h to base + 12 * h
+        val span = 2 * h
+        // ganz sichtbar -> bleibt
+        assertEquals(base, guideWindowFor(base, span, base + 30 * m, base + h, range.first, range.second))
+        // überdeckt das Fenster -> bleibt
+        assertEquals(base, guideWindowFor(base, span, base - h, base + 3 * h, range.first, range.second))
+        // links angeschnitten -> Fenster beginnt mit der Sendung (halbe Stunde abgerundet)
+        assertEquals(base - h, guideWindowFor(base, span, base - 50 * m, base + 10 * m, range.first, range.second))
+        // rechts angeschnitten -> Ende wird sichtbar
+        assertEquals(base + h, guideWindowFor(base, span, base + 100 * m, base + 3 * h, range.first, range.second))
+        // länger als das Fenster -> Anfang sichtbar
+        assertEquals(base + 90 * m, guideWindowFor(base, span, base + 100 * m, base + 6 * h, range.first, range.second))
+        // nie über den geladenen Bereich hinaus
+        assertEquals(range.second - span, guideWindowFor(base, span, base + 11 * h, base + 13 * h, range.first, range.second))
+        assertEquals(range.first, guideWindowFor(base, span, base - 5 * h, base - 2 * h, range.first, range.second))
+    }
+}

@@ -33,7 +33,7 @@ sealed interface PlaylistUiState {
 }
 
 /** Ziel-Bereiche der linken Navigations-Rail. */
-enum class NavDestination { SEARCH, HOME, LIVE, MOVIES, SERIES, SETTINGS }
+enum class NavDestination { SEARCH, HOME, LIVE, GUIDE, MOVIES, SERIES, SETTINGS }
 
 /** "Jetzt läuft"-Info eines Senders: aktueller/nächster Titel + Fortschritt (0..1). */
 data class EpgNowNext(val now: String?, val next: String?, val progress: Float?)
@@ -123,10 +123,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     // Dialog "Playlist hinzufügen" — auch aus den Leerzuständen von Home/Live-TV erreichbar.
     val showPlaylistDialog = mutableStateOf(false)
+    val playlistDialogXtream = mutableStateOf(false) // Dialog im Xtream-Login-Modus öffnen
 
     // true, sobald gespeicherte Playlists/Sender geladen sind. Vorher ist "keine Sender" kein
     // echter Leerzustand — sonst blitzt kurz "Playlist hinzufügen" auf und zieht den TV-Fokus.
     val startupDone = mutableStateOf(false)
+
+    // Erststart-Assistent ohne Playlist: "Einstellungen öffnen" blendet ihn bis zum Neustart aus.
+    val welcomeDismissed = mutableStateOf(false)
+
+    // TV-Guide: true, sobald EPG-Daten vorliegen; Fokus beim Betreten auf die laufende Sendung.
+    val epgAvailable = mutableStateOf(false)
+    val pendingGuideFocus = mutableStateOf(false)
 
     // Xtream-Konto (Ablaufdatum, Verbindungen) und Catch-up-Archiv (Stream-ID -> Tage).
     val accountInfo = mutableStateOf<XtreamAccountInfo?>(null)
@@ -567,6 +575,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         when (dest) {
             NavDestination.HOME -> pendingHomeFocus.value = true
             NavDestination.LIVE -> pendingListFocus.value = true
+            NavDestination.GUIDE -> {
+                // Archiv-Info für Catch-up direkt aus dem Raster (einmal pro Playlist).
+                loadArchiveInfo()
+                pendingGuideFocus.value = true
+            }
             NavDestination.MOVIES -> {
                 if (vodItems.value.isEmpty()) loadVod()
                 pendingVodFocus.value = true
@@ -985,6 +998,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             NavDestination.HOME -> pendingHomeFocus.value = true
             NavDestination.MOVIES -> pendingVodFocus.value = true
             NavDestination.SERIES -> pendingSeriesFocus.value = true
+            NavDestination.GUIDE -> pendingGuideFocus.value = true
             else -> pendingListFocus.value = true
         }
     }
@@ -1037,8 +1051,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val updated = playlists.value.filter { it.url != trimmedUrl } + PlaylistEntry(trimmedName, trimmedUrl)
         playlists.value = updated
         viewModelScope.launch { repository.savePlaylists(updated) }
-        // Erste hinzugefügte Playlist direkt aktivieren.
-        if (url.value.isBlank()) selectPlaylist(updated.last())
+        // Erste hinzugefügte Playlist direkt aktivieren und in Live-TV den Ladefortschritt zeigen.
+        if (url.value.isBlank()) {
+            selectPlaylist(updated.last())
+            navigate(NavDestination.LIVE)
+        }
     }
 
     fun removePlaylist(entry: PlaylistEntry) {
@@ -1138,6 +1155,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         epgData = programmes
         epgNameToId = nameToId
         epgIdCache.clear()
+        epgAvailable.value = programmes.isNotEmpty()
     }
 
     /** EPG-ID eines Kanals (per tvg-id, sonst per normalisiertem Sendernamen), gecacht. */
