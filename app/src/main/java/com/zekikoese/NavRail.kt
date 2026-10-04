@@ -29,7 +29,7 @@ import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
-import androidx.compose.ui.focus.focusRestorer
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
@@ -50,7 +50,9 @@ private data class RailEntry(val dest: NavDestination, val label: String, val ic
 fun NavRail(
     current: NavDestination,
     xtreamAvailable: Boolean,
-    onNavigate: (NavDestination) -> Unit
+    onNavigate: (NavDestination) -> Unit,
+    focusRequester: FocusRequester? = null, // Ziel für „Zurück auf Home“ (führt zum aktuellen Eintrag)
+    onFocusChange: (Boolean) -> Unit = {}
 ) {
     val entries = buildList {
         add(RailEntry(NavDestination.SEARCH, "Suche", R.drawable.ic_nav_search))
@@ -65,6 +67,9 @@ fun NavRail(
     }
 
     var railFocused by remember { mutableStateOf(false) }
+    // Ein FocusRequester je Eintrag: Betreten der Rail landet immer auf dem aktuellen Bereich.
+    val itemFocus = remember { mutableMapOf<NavDestination, FocusRequester>() }
+    fun focusOf(dest: NavDestination) = itemFocus.getOrPut(dest) { FocusRequester() }
     val width by animateDpAsState(
         targetValue = if (railFocused) 232.dp else 72.dp,
         animationSpec = tween(180),
@@ -76,10 +81,15 @@ fun NavRail(
             .fillMaxHeight()
             .width(width)
             .background(MaterialTheme.colorScheme.surface)
-            // Beim Wieder-Betreten der Rail landet der Fokus auf dem zuletzt fokussierten Eintrag.
-            .focusRestorer()
+            // Beim Betreten der Rail (LINKS aus dem Inhalt oder „Zurück“ auf Home) landet der
+            // Fokus auf dem Eintrag des aktuellen Bereichs.
+            .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
+            .focusProperties { onEnter = { focusOf(current).requestFocus() } }
             .focusGroup()
-            .onFocusChanged { railFocused = it.hasFocus }
+            .onFocusChanged {
+                railFocused = it.hasFocus
+                onFocusChange(it.hasFocus)
+            }
             .padding(horizontal = 8.dp, vertical = 20.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
@@ -110,6 +120,7 @@ fun NavRail(
                 entry = entry,
                 selected = current == entry.dest,
                 expanded = railFocused,
+                modifier = Modifier.focusRequester(focusOf(entry.dest)),
                 onClick = { onNavigate(entry.dest) }
             )
         }
@@ -122,10 +133,11 @@ private fun RailItem(
     entry: RailEntry,
     selected: Boolean,
     expanded: Boolean,
+    modifier: Modifier = Modifier,
     onClick: () -> Unit
 ) {
     Row(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = if (expanded) 4.dp else 2.dp)
             .focusProperties { left = FocusRequester.Cancel }

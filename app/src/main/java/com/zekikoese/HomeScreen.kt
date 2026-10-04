@@ -41,7 +41,6 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import coil.compose.AsyncImage
 import com.zekikoese.ui.LocalIsTv
 import com.zekikoese.ui.tvFocusFrame
 import kotlinx.coroutines.android.awaitFrame
@@ -244,21 +243,13 @@ private fun ContinueWatchingCard(
                 .clip(RoundedCornerShape(8.dp))
                 .background(MaterialTheme.colorScheme.surfaceVariant)
         ) {
-            if (item.poster != null) {
-                AsyncImage(
-                    model = item.poster,
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize()
-                )
-            } else {
-                Text(
-                    text = item.title.take(1).uppercase(),
-                    style = MaterialTheme.typography.headlineLarge,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
-                    modifier = Modifier.align(Alignment.Center)
-                )
-            }
+            ImageOrInitial(
+                model = item.poster,
+                name = item.title,
+                contentScale = ContentScale.Crop,
+                textStyle = MaterialTheme.typography.headlineLarge,
+                modifier = Modifier.fillMaxSize()
+            )
             val progress = item.progress
             if (progress != null) {
                 Box(
@@ -315,20 +306,12 @@ private fun ChannelCard(
                 .fillMaxWidth()
                 .height(64.dp)
         ) {
-            if (channel.logo != null) {
-                AsyncImage(
-                    model = channel.logo,
-                    contentDescription = null,
-                    modifier = Modifier.size(56.dp).clip(RoundedCornerShape(8.dp)).align(Alignment.Center)
-                )
-            } else {
-                Text(
-                    text = channel.name.take(1).uppercase(),
-                    style = MaterialTheme.typography.headlineMedium,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
-                    modifier = Modifier.align(Alignment.Center)
-                )
-            }
+            ImageOrInitial(
+                model = channel.logo,
+                name = channel.name,
+                textStyle = MaterialTheme.typography.headlineMedium,
+                modifier = Modifier.size(56.dp).clip(RoundedCornerShape(8.dp)).align(Alignment.Center)
+            )
         }
         Spacer(Modifier.height(8.dp))
         Text(

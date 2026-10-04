@@ -126,6 +126,9 @@ class AppDatabase private constructor(context: Context, name: String?) :
         }
     }
 
+    /** Zeitpunkt des letzten gespeicherten EPG-Stands; null = kein Cache. */
+    fun epgSavedAt(): Long? = meta(KEY_EPG_SAVED)?.toLongOrNull()
+
     /** EPG-Cache, falls vorhanden und jünger als [maxAgeMs]; sonst null. */
     fun readEpg(maxAgeMs: Long): Pair<Map<String, List<EpgProgramme>>, Map<String, String>>? {
         val savedAt = meta(KEY_EPG_SAVED)?.toLongOrNull() ?: return null

@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -20,6 +21,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -34,6 +36,11 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.toggleableState
+import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -371,7 +378,13 @@ private fun InputField(
 
 /** Hinweis auf eine neuere App-Version (GitHub-Release). */
 @Composable
-fun UpdateDialog(release: AppRelease, onInstall: () -> Unit, onLater: () -> Unit) {
+fun UpdateDialog(
+    release: AppRelease,
+    inProgress: Boolean,
+    status: String,
+    onInstall: () -> Unit,
+    onLater: () -> Unit
+) {
     DialogFrame(onDismiss = onLater, tvWidth = 620) {
         DialogTitle("Update verfügbar: ${release.version}")
         if (release.notes.isNotBlank()) {
@@ -384,8 +397,20 @@ fun UpdateDialog(release: AppRelease, onInstall: () -> Unit, onLater: () -> Unit
                 modifier = Modifier.padding(bottom = 12.dp)
             )
         }
-        DialogRow("Herunterladen und installieren", onClick = onInstall)
-        DialogRow("Später", onClick = onLater)
+        // Download-Fortschritt bzw. Hinweis (z. B. Installationsrecht fehlt) direkt im Dialog.
+        if (status.isNotEmpty()) {
+            Text(
+                text = status,
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
+        }
+        DialogRow(
+            if (inProgress) "Wird geladen…" else "Herunterladen und installieren",
+            onClick = { if (!inProgress) onInstall() }
+        )
+        DialogRow(if (inProgress) "Im Hintergrund weiterladen" else "Später", onClick = onLater)
     }
 }
 
@@ -652,4 +677,121 @@ fun EpgDayDialog(
         }
         DialogRow("Schließen") { onDismiss() }
     }
+}
+
+/**
+ * Einstellung als eine fokussierbare Zeile mit Schalter: OK/Antippen auf die ganze Zeile
+ * schaltet um (ein Fokus-Stopp statt zwei „An/Aus“-Chips); TalkBack liest den Zustand vor.
+ */
+@Composable
+internal fun SwitchRow(
+    title: String,
+    checked: Boolean,
+    onToggle: () -> Unit,
+    modifier: Modifier = Modifier,
+    subtitle: String? = null
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = modifier
+            .fillMaxWidth()
+            .semantics(mergeDescendants = true) {
+                role = Role.Switch
+                toggleableState = ToggleableState(checked)
+            }
+            .tvFocusFrame(onClick = onToggle, restColor = Color.Transparent)
+            .padding(horizontal = 16.dp, vertical = 10.dp)
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+            if (subtitle != null) {
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+        Spacer(Modifier.width(16.dp))
+        // Nur Anzeige — umgeschaltet wird über die ganze Zeile (D-Pad-Fokus liegt auf der Zeile).
+        Switch(checked = checked, onCheckedChange = null)
+    }
+}
+
+/** Kategorie in der Verwaltung: [key] = gespeicherter Wert (Name bzw. ID), [label] = Anzeige. */
+data class ManagedCategory(val key: String, val label: String, val count: Int?)
+
+/**
+ * Kategorien aus- und einblenden (Live-TV, Filme, Serien): mit Suchfeld bei langen Listen und
+ * „Alle ein-/ausblenden“ für die angezeigten Treffer — statt hunderter Chips in den Einstellungen.
+ */
+@Composable
+fun CategoryManagerDialog(
+    title: String,
+    categories: List<ManagedCategory>,
+    hidden: Set<String>,
+    loading: Boolean,
+    onSetHidden: (keys: Collection<String>, hide: Boolean) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val isTv = LocalIsTv.current
+    var filter by remember { mutableStateOf("") }
+    val shown = remember(categories, filter) {
+        val query = filter.trim()
+        if (query.isEmpty()) categories else categories.filter { it.label.contains(query, ignoreCase = true) }
+    }
+    val hiddenCount = categories.count { it.key in hidden }
+    val firstRowFocus = remember { FocusRequester() }
+
+    DialogFrame(onDismiss = onDismiss, tvWidth = 600) {
+        DialogTitle(title)
+        Text(
+            text = when {
+                loading && categories.isEmpty() -> "Kategorien werden geladen…"
+                categories.isEmpty() -> "Keine Kategorien vorhanden."
+                else -> "$hiddenCount von ${categories.size} ausgeblendet. Ausgeblendete Kategorien " +
+                    "erscheinen weder in der Auswahl noch unter „Alle“ oder in der Suche."
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(bottom = 8.dp)
+        )
+        if (categories.size > 8) {
+            OutlinedTextField(
+                value = filter,
+                onValueChange = { filter = it },
+                label = { Text("Kategorie suchen") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
+            )
+        }
+        if (shown.isNotEmpty()) {
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.padding(bottom = 8.dp)) {
+                val scope = if (filter.isBlank()) "Alle" else "Treffer"
+                GroupChip("$scope einblenden", selected = false) { onSetHidden(shown.map { it.key }, false) }
+                GroupChip("$scope ausblenden", selected = false) { onSetHidden(shown.map { it.key }, true) }
+            }
+        }
+        LazyColumn(modifier = Modifier.heightIn(max = if (isTv) 400.dp else 360.dp)) {
+            itemsIndexed(shown, key = { _, it -> it.key }) { index, category ->
+                val visible = category.key !in hidden
+                SwitchRow(
+                    title = category.label + (category.count?.let { "  ($it)" } ?: ""),
+                    checked = visible,
+                    onToggle = { onSetHidden(listOf(category.key), visible) },
+                    modifier = if (index == 0) Modifier.focusRequester(firstRowFocus) else Modifier
+                )
+            }
+        }
+        DialogRow("Fertig", onClick = onDismiss)
+    }
+    // TV: Fokus auf die erste Kategorie (nicht ins Suchfeld — das würde die Tastatur öffnen).
+    if (isTv && categories.isNotEmpty()) RequestInitialFocus(firstRowFocus)
 }

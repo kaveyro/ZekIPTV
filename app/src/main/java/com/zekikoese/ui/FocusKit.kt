@@ -27,7 +27,6 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
-import com.zekikoese.ui.theme.AccentGlow
 
 /**
  * Einheitlicher D-Pad-Fokusrahmen für alle fokussierbaren Elemente:
@@ -63,7 +62,8 @@ fun Modifier.tvFocusFrame(
     )
     val borderColor by animateColorAsState(
         targetValue = when {
-            focused -> AccentGlow
+            // Hell/Dunkel je eigener Glow-Ton (secondary): im hellen Design sonst kaum sichtbar.
+            focused -> MaterialTheme.colorScheme.secondary
             isSelected -> MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
             else -> unfocusedBorderColor
         },

@@ -30,7 +30,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -55,7 +54,6 @@ import kotlinx.coroutines.android.awaitFrame
 @Composable
 fun WelcomeScreen(mainViewModel: MainViewModel) {
     val isTv = LocalIsTv.current
-    val backupInfo by mainViewModel.backupInfo
     val firstOption = remember { FocusRequester() }
     val skipFocus = remember { FocusRequester() }
 
@@ -156,16 +154,6 @@ fun WelcomeScreen(mainViewModel: MainViewModel) {
                     )
                 }
             }
-        }
-
-        if (backupInfo.isNotEmpty()) {
-            Spacer(Modifier.height(16.dp))
-            Text(
-                text = backupInfo,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center
-            )
         }
 
         Spacer(Modifier.height(if (isTv) 20.dp else 24.dp))

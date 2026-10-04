@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -132,6 +133,7 @@ fun VideoPlayer(
     timeshiftEnabled: Boolean,
     onCycleResize: () -> Unit,
     onJumpToNumber: ((Int) -> Boolean)?,
+    channelNameForNumber: ((Int) -> String?)?,
     onBack: () -> Unit,
     onZap: ((Int) -> Unit)?,
     onSwapLast: (() -> Unit)?,
@@ -242,6 +244,13 @@ fun VideoPlayer(
                     playerError = null
                 }
             }
+
+            // Bildschirm nur anlassen, solange wirklich abgespielt (bzw. gepuffert) wird — nicht
+            // bei Pause, Fehler oder Ende (Einbrenngefahr am TV, Akku am Handy).
+            override fun onEvents(player: Player, events: Player.Events) {
+                playerViewRef?.keepScreenOn = player.playWhenReady &&
+                    (player.playbackState == Player.STATE_READY || player.playbackState == Player.STATE_BUFFERING)
+            }
         }
         exoPlayer.addListener(listener)
         onDispose { exoPlayer.removeListener(listener) }
@@ -323,8 +332,15 @@ fun VideoPlayer(
         }
     }
 
-    // Hardware-Zurück-Taste der Fernbedienung kehrt zur Liste zurück.
-    BackHandler(onBack = onBack)
+    // Zurück: erst Direktwahl verwerfen, dann (TV) die Steuerleiste ausblenden, dann verlassen.
+    BackHandler {
+        val controlsVisible = playerViewRef?.isControllerFullyVisible == true
+        when (playerBackAction(numberInput.value.isNotEmpty(), controlsVisible, isTv)) {
+            PlayerBackAction.CLEAR_NUMBER -> numberInput.value = ""
+            PlayerBackAction.HIDE_CONTROLS -> playerViewRef?.hideController()
+            PlayerBackAction.EXIT -> onBack()
+        }
+    }
 
     // Smartphone: Wiedergabe im immersiven Vollbild — Status-/Navigationsleiste ausblenden und
     // ins Querformat drehen, damit das Bild den ganzen Schirm nutzt. Beim Verlassen zurücksetzen.
@@ -428,12 +444,22 @@ fun VideoPlayer(
     }
 
     // Direktwahl: 2 s nach der letzten Ziffer (oder sofort bei 4 Ziffern) umschalten.
+    // Gibt es die Nummer nicht, kurz einen Hinweis zeigen statt kommentarlos nichts zu tun.
+    var numberNotFound by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(numberInput.value) {
         val input = numberInput.value
         if (input.isEmpty()) return@LaunchedEffect
+        numberNotFound = null
         if (input.length < MAX_NUMBER_DIGITS) delay(2_000)
-        currentOnJumpToNumber?.invoke(input.toInt())
+        val found = currentOnJumpToNumber?.invoke(input.toInt()) ?: true
         numberInput.value = ""
+        if (!found) numberNotFound = input
+    }
+    LaunchedEffect(numberNotFound) {
+        if (numberNotFound != null) {
+            delay(2_500)
+            numberNotFound = null
+        }
     }
 
     // Info-Overlay kurz einblenden: bei jedem (neuen) Medium (auch nach Zappen) und
@@ -514,7 +540,7 @@ fun VideoPlayer(
                     // TV: Steuerleiste nicht automatisch einblenden — sie erscheint auf OK/Pfeil.
                     // Smartphone: beim Start/Antippen zeigen (Standard-Touch-Verhalten).
                     controllerAutoShow = !isTv
-                    keepScreenOn = true             // Bildschirm bleibt während der Wiedergabe an
+                    keepScreenOn = true             // bis zum ersten Player-Ereignis (siehe onEvents)
                     setShowNextButton(false)
                     setShowPreviousButton(false)
                     setShowBuffering(PlayerView.SHOW_BUFFERING_WHEN_PLAYING) // Spinner beim Start/Zappen
@@ -578,19 +604,37 @@ fun VideoPlayer(
             }
         }
 
-        // Direktwahl-Anzeige oben rechts.
-        if (numberInput.value.isNotEmpty() && !inPip) {
-            Text(
-                text = numberInput.value,
-                color = Color.White,
-                style = MaterialTheme.typography.displayMedium,
+        // Direktwahl-Anzeige oben rechts: Nummer + Name des Zielsenders (bzw. Hinweis).
+        val typed = numberInput.value
+        val missing = numberNotFound
+        if ((typed.isNotEmpty() || missing != null) && !inPip) {
+            val target = typed.takeIf { it.isNotEmpty() }?.let { channelNameForNumber?.invoke(it.toInt()) }
+            Column(
+                horizontalAlignment = Alignment.End,
                 modifier = Modifier
                     .align(Alignment.TopEnd)
                     .padding(32.dp)
                     .clip(RoundedCornerShape(12.dp))
                     .background(Color.Black.copy(alpha = 0.6f))
                     .padding(horizontal = 24.dp, vertical = 8.dp)
-            )
+            ) {
+                Text(
+                    text = typed.ifEmpty { missing.orEmpty() },
+                    color = Color.White,
+                    style = MaterialTheme.typography.displayMedium
+                )
+                Text(
+                    text = when {
+                        typed.isEmpty() -> "Sender $missing nicht vorhanden"
+                        target != null -> target
+                        else -> "–"
+                    },
+                    color = if (typed.isEmpty()) Color(0xFFFFB4AB) else Color.White.copy(alpha = 0.85f),
+                    style = MaterialTheme.typography.titleMedium,
+                    maxLines = 1,
+                    modifier = Modifier.widthIn(max = 360.dp)
+                )
+            }
         }
 
         // Fehler: Fokus auf "Erneut versuchen", damit die Fernbedienung die Knöpfe erreicht.
@@ -618,7 +662,22 @@ fun VideoPlayer(
             }
         }
 
-        if (!inPip && (overlayVisible || reconnectAttempt > 0 || playerError != null)) {
+        // Filme/Serien: Titelzeile mit Endzeit auch, solange die Steuerleiste sichtbar ist.
+        val vodInfoVisible = !media.isLive && controllerVisible.value
+        var vodTimes by remember(media.url) { mutableStateOf<String?>(null) }
+        LaunchedEffect(media.url, overlayVisible || vodInfoVisible) {
+            if (media.isLive || !(overlayVisible || vodInfoVisible)) return@LaunchedEffect
+            while (true) {
+                val duration = exoPlayer.duration
+                vodTimes = if (duration != C.TIME_UNSET && duration > 0) {
+                    val remaining = (duration - exoPlayer.currentPosition).coerceAtLeast(0L)
+                    "Endet um ${clockLabel(System.currentTimeMillis() + remaining)} · ${remainingLabel(remaining)}"
+                } else null
+                delay(1_000)
+            }
+        }
+
+        if (!inPip && (overlayVisible || vodInfoVisible || reconnectAttempt > 0 || playerError != null)) {
             // Uhrzeit zum Einblende-Zeitpunkt (Overlay lebt nur wenige Sekunden).
             val timeText = remember(overlayVisible, infoTrigger.value, media.url) {
                 SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
@@ -655,12 +714,30 @@ fun VideoPlayer(
                         style = MaterialTheme.typography.titleMedium
                     )
                 }
+                val times = vodTimes
+                if (!media.isLive && times != null) {
+                    Text(
+                        text = times,
+                        color = Color.White.copy(alpha = 0.85f),
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                }
                 if (epg.now != null) {
                     Text(
                         text = "Jetzt: ${epg.now}",
                         color = Color.White.copy(alpha = 0.85f),
                         style = MaterialTheme.typography.titleMedium
                     )
+                    // Zeitfenster und Restzeit der laufenden Sendung.
+                    val start = epg.nowStartMs
+                    val stop = epg.nowStopMs
+                    if (start != null && stop != null) {
+                        Text(
+                            text = programmeTimesLabel(start, stop, System.currentTimeMillis()),
+                            color = Color.White.copy(alpha = 0.7f),
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
                     val progress = epg.progress
                     if (progress != null) {
                         Spacer(Modifier.height(6.dp))
@@ -684,7 +761,7 @@ fun VideoPlayer(
                 }
                 if (epg.next != null) {
                     Text(
-                        text = "Gleich: ${epg.next}",
+                        text = epg.nextStartMs?.let { "Ab ${clockLabel(it)}: ${epg.next}" } ?: "Gleich: ${epg.next}",
                         color = Color.White.copy(alpha = 0.6f),
                         style = MaterialTheme.typography.bodyMedium
                     )

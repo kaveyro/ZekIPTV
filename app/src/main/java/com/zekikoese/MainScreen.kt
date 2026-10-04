@@ -58,6 +58,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -82,6 +83,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -92,9 +94,13 @@ import com.zekikoese.ui.LocalIsTv
 import com.zekikoese.ui.LoadingPlaceholder
 import com.zekikoese.ui.tvFocusFrame
 import kotlinx.coroutines.android.awaitFrame
+import kotlinx.coroutines.delay
 
 /** Sprungweite (Einträge) beim Blättern mit den Vor-/Zurückspulen-Tasten in langen Listen. */
 private const val PAGE_JUMP = 10
+
+/** Zeitfenster für das zweite „Zurück“ zum Beenden (Handy). */
+private const val EXIT_CONFIRM_MS = 3_000L
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
@@ -110,8 +116,31 @@ fun MainScreen(mainViewModel: MainViewModel = viewModel()) {
     var actionsChannel by remember { mutableStateOf<Channel?>(null) }
     val isTvUi = LocalIsTv.current
 
-    BackHandler(enabled = destination != NavDestination.HOME) {
+    // Erststart ohne Playlist: Assistent statt leerer Oberfläche.
+    val showWelcome = mainViewModel.startupDone.value && mainViewModel.playlists.value.isEmpty() &&
+        !mainViewModel.welcomeDismissed.value
+
+    // Zurück auf Home beendet die App nicht sofort: TV — erst zur Navigations-Rail (von dort
+    // beendet ein weiteres Zurück); Handy — zweimal drücken (Hinweis per Snackbar).
+    val railFocus = remember { FocusRequester() }
+    var railFocused by remember { mutableStateOf(false) }
+    var exitArmed by remember { mutableStateOf(false) }
+    LaunchedEffect(exitArmed) {
+        if (exitArmed) {
+            delay(EXIT_CONFIRM_MS)
+            exitArmed = false
+        }
+    }
+    val atHome = destination == NavDestination.HOME
+    val guardHome = !showWelcome && if (isTvUi) !railFocused else !exitArmed
+
+    BackHandler(enabled = !atHome || guardHome) {
         when {
+            atHome && isTvUi -> runCatching { railFocus.requestFocus() }
+            atHome -> {
+                exitArmed = true
+                mainViewModel.showMessage("Zum Beenden erneut „Zurück“ drücken")
+            }
             destination == NavDestination.LIVE && selectedGroup != null ->
                 mainViewModel.selectGroup(null)
             destination == NavDestination.MOVIES && vodCategory != null ->
@@ -145,9 +174,6 @@ fun MainScreen(mainViewModel: MainViewModel = viewModel()) {
         }
     }
 
-    // Erststart ohne Playlist: Assistent statt leerer Oberfläche.
-    val showWelcome = mainViewModel.startupDone.value && mainViewModel.playlists.value.isEmpty() &&
-        !mainViewModel.welcomeDismissed.value
     if (showWelcome) {
         WelcomeScreen(mainViewModel)
     } else if (isTvUi) {
@@ -158,7 +184,9 @@ fun MainScreen(mainViewModel: MainViewModel = viewModel()) {
             NavRail(
                 current = destination,
                 xtreamAvailable = xtreamAvailable,
-                onNavigate = mainViewModel::navigate
+                onNavigate = mainViewModel::navigate,
+                focusRequester = railFocus,
+                onFocusChange = { railFocused = it }
             )
         }
     } else {
@@ -201,6 +229,8 @@ fun MainScreen(mainViewModel: MainViewModel = viewModel()) {
     if (release != null && showUpdateDialog && suggestion == null) {
         UpdateDialog(
             release = release,
+            inProgress = mainViewModel.updateInProgress.value,
+            status = mainViewModel.updateStatus.value,
             onInstall = mainViewModel::installUpdate,
             onLater = mainViewModel::dismissUpdateDialog
         )
@@ -388,6 +418,46 @@ private fun SearchResults(
     val vod by mainViewModel.searchVod
     val series by mainViewModel.searchSeries
     val favorites by mainViewModel.favorites
+    val query by mainViewModel.searchQuery
+    val isTv = LocalIsTv.current
+
+    // Scroll-Position über Detailseite/Player hinweg behalten (nur für denselben Suchbegriff).
+    val saved = mainViewModel.searchScroll
+    val listState = rememberLazyListState(
+        initialFirstVisibleItemIndex = if (saved.first == query) saved.second else 0,
+        initialFirstVisibleItemScrollOffset = if (saved.first == query) saved.third else 0
+    )
+    DisposableEffect(listState) {
+        onDispose {
+            mainViewModel.searchScroll = Triple(query, listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset)
+        }
+    }
+    var shownQuery by remember { mutableStateOf(query) }
+    LaunchedEffect(query) {
+        if (query != shownQuery) {
+            shownQuery = query
+            listState.scrollToItem(0)
+        }
+    }
+
+    // TV: nach Detailseite/Player den zuletzt geöffneten Treffer wieder fokussieren.
+    val resultFocus = remember { FocusRequester() }
+    val pendingFocus by mainViewModel.pendingSearchFocus
+    LaunchedEffect(pendingFocus) {
+        if (!pendingFocus) return@LaunchedEffect
+        if (isTv && mainViewModel.searchFocusKey != null) {
+            repeat(10) {
+                awaitFrame()
+                if (runCatching { resultFocus.requestFocus() }.isSuccess) {
+                    mainViewModel.pendingSearchFocus.value = false
+                    return@LaunchedEffect
+                }
+            }
+        }
+        mainViewModel.pendingSearchFocus.value = false
+    }
+    fun focusTarget(key: String) =
+        if (key == mainViewModel.searchFocusKey) Modifier.focusRequester(resultFocus) else Modifier
 
     if (channels.isEmpty() && vod.isEmpty() && series.isEmpty()) {
         EmptyState(
@@ -399,17 +469,21 @@ private fun SearchResults(
     }
 
     LazyColumn(
+        state = listState,
         modifier = Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         if (channels.isNotEmpty()) {
             item { SearchSectionTitle("Sender (${channels.size})") }
             items(channels, key = { "c" + it.url + it.name }) { channel ->
+                val key = "c" + channel.url
                 ChannelRow(
                     channel = channel,
                     isFavorite = channel.url in favorites,
                     epg = mainViewModel.epgFor(channel),
+                    modifier = focusTarget(key),
                     onClick = {
+                        mainViewModel.searchFocusKey = key
                         mainViewModel.recordSearchQuery()
                         // Aus der Suche heraus wird in der vollständigen Liste gezappt.
                         mainViewModel.selectChannel(channel, mainViewModel.channelsForGroup(null))
@@ -428,12 +502,14 @@ private fun SearchResults(
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     vod.forEach { item ->
+                        val key = "v" + item.id
                         PosterCard(
                             title = item.name,
                             icon = item.icon,
                             isFavorite = mainViewModel.vodFavKey(item) in favorites,
-                            modifier = Modifier.width(160.dp),
+                            modifier = Modifier.width(160.dp).then(focusTarget(key)),
                             onClick = {
+                                mainViewModel.searchFocusKey = key
                                 mainViewModel.recordSearchQuery()
                                 mainViewModel.openVod(item)
                             },
@@ -455,12 +531,14 @@ private fun SearchResults(
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     series.forEach { item ->
+                        val key = "s" + item.id
                         PosterCard(
                             title = item.name,
                             icon = item.cover,
                             isFavorite = mainViewModel.seriesFavKey(item) in favorites,
-                            modifier = Modifier.width(160.dp),
+                            modifier = Modifier.width(160.dp).then(focusTarget(key)),
                             onClick = {
+                                mainViewModel.searchFocusKey = key
                                 mainViewModel.recordSearchQuery()
                                 mainViewModel.openSeries(item)
                             },
@@ -500,6 +578,8 @@ private fun LiveScreen(
 
     var focusedIndex by remember { mutableStateOf(0) }
     var focusedChannel by remember { mutableStateOf<Channel?>(null) }
+    // Stabile Keys: Fokus und Position springen beim Filterwechsel/Neuladen nicht.
+    val channelKeys = remember(channels) { stableChannelKeys(channels) }
 
     // Pull-to-Refresh (Handy): nur solange sichtbar, bis das Neuladen abgeschlossen ist.
     var refreshing by remember { mutableStateOf(false) }
@@ -664,13 +744,14 @@ private fun LiveScreen(
                                         },
                                     verticalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
-                                    itemsIndexed(channels) { index, channel ->
+                                    itemsIndexed(channels, key = { index, _ -> channelKeys[index] }) { index, channel ->
                                         ChannelRow(
                                             channel = channel,
                                             isFavorite = channel.url in favorites,
                                             epg = mainViewModel.epgFor(channel),
                                             showGroup = selectedGroup == null,
                                             isCurrent = channel.url == lastWatchedUrl,
+                                            number = mainViewModel.channelNumberOf(channel),
                                             modifier = if (index == targetFocusIndex) {
                                                 Modifier.focusRequester(listFocusRequester)
                                             } else Modifier,
@@ -699,7 +780,8 @@ private fun LiveScreen(
 private fun VodContent(mainViewModel: MainViewModel) {
     val vod by mainViewModel.visibleVod
     val allItems by mainViewModel.vodItems
-    val categories by mainViewModel.vodCategories
+    val shownCount by mainViewModel.shownVodCount
+    val categories by mainViewModel.shownVodCategories
     val categoryCounts by mainViewModel.vodCategoryCounts
     val favCount by mainViewModel.vodFavoriteCount
     val selectedCategory by mainViewModel.selectedVodCategory
@@ -707,7 +789,11 @@ private fun VodContent(mainViewModel: MainViewModel) {
     val favorites by mainViewModel.favorites
 
     val isTv = LocalIsTv.current
-    val gridState = rememberLazyGridState()
+    // Scroll-Position aus dem ViewModel: der Bildschirm wird während Detailseite/Player verworfen.
+    val gridState = rememberLazyGridState(mainViewModel.vodScroll.first, mainViewModel.vodScroll.second)
+    DisposableEffect(gridState) {
+        onDispose { mainViewModel.vodScroll = gridState.firstVisibleItemIndex to gridState.firstVisibleItemScrollOffset }
+    }
     val gridFocusRequester = remember { FocusRequester() }
     val pendingFocus by mainViewModel.pendingVodFocus
     val targetIndex = mainViewModel.vodFocusIndex.coerceIn(0, maxOf(0, vod.lastIndex))
@@ -720,7 +806,10 @@ private fun VodContent(mainViewModel: MainViewModel) {
 
     LaunchedEffect(pendingFocus, vod.size) {
         if (!pendingFocus || vod.isEmpty()) return@LaunchedEffect
-        gridState.scrollToItem(targetIndex)
+        // Nur scrollen, wenn das Ziel nicht ohnehin sichtbar ist (sonst springt die Ansicht).
+        if (gridState.layoutInfo.visibleItemsInfo.none { it.index == targetIndex }) {
+            gridState.scrollToItem(targetIndex)
+        }
         if (!isTv) {
             mainViewModel.pendingVodFocus.value = false
             return@LaunchedEffect
@@ -736,7 +825,7 @@ private fun VodContent(mainViewModel: MainViewModel) {
     }
 
     val categoryEntries = buildList {
-        add(CategoryEntry(null, "Alle", allItems.size))
+        add(CategoryEntry(null, "Alle", shownCount))
         add(CategoryEntry(MainViewModel.FAV_CATEGORY, "★ Favoriten", favCount))
         categories.forEach { (id, name) -> add(CategoryEntry(id, name, categoryCounts[id])) }
     }
@@ -802,7 +891,11 @@ private fun VodContent(mainViewModel: MainViewModel) {
                                     modifier = if (index == targetIndex) {
                                         Modifier.focusRequester(gridFocusRequester)
                                     } else Modifier,
-                                    onClick = { mainViewModel.openVod(item) },
+                                    onClick = {
+                                        // Handy: Antippen fokussiert nicht — Index hier merken.
+                                        mainViewModel.vodFocusIndex = index
+                                        mainViewModel.openVod(item)
+                                    },
                                     onLongClick = { mainViewModel.toggleVodFavorite(item) },
                                     onFocusChange = { focused ->
                                         if (focused) {
@@ -824,7 +917,8 @@ private fun VodContent(mainViewModel: MainViewModel) {
 private fun SeriesContent(mainViewModel: MainViewModel) {
     val series by mainViewModel.visibleSeries
     val allItems by mainViewModel.seriesItems
-    val categories by mainViewModel.seriesCategories
+    val shownCount by mainViewModel.shownSeriesCount
+    val categories by mainViewModel.shownSeriesCategories
     val categoryCounts by mainViewModel.seriesCategoryCounts
     val favCount by mainViewModel.seriesFavoriteCount
     val selectedCategory by mainViewModel.selectedSeriesCategory
@@ -832,7 +926,11 @@ private fun SeriesContent(mainViewModel: MainViewModel) {
     val favorites by mainViewModel.favorites
 
     val isTv = LocalIsTv.current
-    val gridState = rememberLazyGridState()
+    // Scroll-Position aus dem ViewModel: der Bildschirm wird während Detailseite/Player verworfen.
+    val gridState = rememberLazyGridState(mainViewModel.seriesScroll.first, mainViewModel.seriesScroll.second)
+    DisposableEffect(gridState) {
+        onDispose { mainViewModel.seriesScroll = gridState.firstVisibleItemIndex to gridState.firstVisibleItemScrollOffset }
+    }
     val gridFocusRequester = remember { FocusRequester() }
     val pendingFocus by mainViewModel.pendingSeriesFocus
     val targetIndex = mainViewModel.seriesFocusIndex.coerceIn(0, maxOf(0, series.lastIndex))
@@ -845,7 +943,10 @@ private fun SeriesContent(mainViewModel: MainViewModel) {
 
     LaunchedEffect(pendingFocus, series.size) {
         if (!pendingFocus || series.isEmpty()) return@LaunchedEffect
-        gridState.scrollToItem(targetIndex)
+        // Nur scrollen, wenn das Ziel nicht ohnehin sichtbar ist (sonst springt die Ansicht).
+        if (gridState.layoutInfo.visibleItemsInfo.none { it.index == targetIndex }) {
+            gridState.scrollToItem(targetIndex)
+        }
         if (!isTv) {
             mainViewModel.pendingSeriesFocus.value = false
             return@LaunchedEffect
@@ -861,7 +962,7 @@ private fun SeriesContent(mainViewModel: MainViewModel) {
     }
 
     val categoryEntries = buildList {
-        add(CategoryEntry(null, "Alle", allItems.size))
+        add(CategoryEntry(null, "Alle", shownCount))
         add(CategoryEntry(MainViewModel.FAV_CATEGORY, "★ Favoriten", favCount))
         categories.forEach { (id, name) -> add(CategoryEntry(id, name, categoryCounts[id])) }
     }
@@ -927,7 +1028,10 @@ private fun SeriesContent(mainViewModel: MainViewModel) {
                                     modifier = if (index == targetIndex) {
                                         Modifier.focusRequester(gridFocusRequester)
                                     } else Modifier,
-                                    onClick = { mainViewModel.openSeries(item) },
+                                    onClick = {
+                                        mainViewModel.seriesFocusIndex = index
+                                        mainViewModel.openSeries(item)
+                                    },
                                     onLongClick = { mainViewModel.toggleSeriesFavorite(item) },
                                     onFocusChange = { focused ->
                                         if (focused) {
@@ -967,6 +1071,38 @@ private fun PosterGridPlaceholder() {
     }
 }
 
+/**
+ * Logo/Poster mit Initiale als Ersatz — auch wenn das Bild nicht lädt (tote Logo-Links sind in
+ * Playlists häufig); sonst bliebe eine leere Kachel stehen.
+ */
+@Composable
+internal fun ImageOrInitial(
+    model: String?,
+    name: String,
+    textStyle: TextStyle,
+    modifier: Modifier = Modifier,
+    contentScale: ContentScale = ContentScale.Fit
+) {
+    var failed by remember(model) { mutableStateOf(false) }
+    Box(modifier = modifier, contentAlignment = Alignment.Center) {
+        if (model == null || failed) {
+            Text(
+                text = name.trim().take(1).uppercase(),
+                style = textStyle,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f)
+            )
+        } else {
+            AsyncImage(
+                model = model,
+                contentDescription = null,
+                contentScale = contentScale,
+                onError = { failed = true },
+                modifier = Modifier.fillMaxSize()
+            )
+        }
+    }
+}
+
 @Composable
 private fun SearchSectionTitle(title: String) {
     Text(
@@ -1000,33 +1136,17 @@ private fun PosterCard(
             .padding(6.dp)
     ) {
         Box {
-            if (icon != null) {
-                AsyncImage(
-                    model = icon,
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .aspectRatio(2f / 3f)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(MaterialTheme.colorScheme.surfaceVariant)
-                )
-            } else {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .aspectRatio(2f / 3f)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(MaterialTheme.colorScheme.surfaceVariant)
-                ) {
-                    Text(
-                        text = title.take(1).uppercase(),
-                        style = MaterialTheme.typography.headlineLarge,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
-                        modifier = Modifier.align(Alignment.Center)
-                    )
-                }
-            }
+            ImageOrInitial(
+                model = icon,
+                name = title,
+                contentScale = ContentScale.Crop,
+                textStyle = MaterialTheme.typography.headlineLarge,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(2f / 3f)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+            )
             if (isFavorite) {
                 Icon(
                     imageVector = Icons.Filled.Star,
@@ -1055,6 +1175,7 @@ internal fun ChannelRow(
     modifier: Modifier = Modifier,
     showGroup: Boolean = false,
     isCurrent: Boolean = false,
+    number: Int? = null,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
     onMore: (() -> Unit)? = null,
@@ -1075,24 +1196,24 @@ internal fun ChannelRow(
         verticalAlignment = Alignment.CenterVertically
     ) {
         // Feste Logo-Spalte (Initiale als Platzhalter), damit die Namen bündig untereinander stehen.
-        Box(modifier = Modifier.size(40.dp), contentAlignment = Alignment.Center) {
-            if (channel.logo != null) {
-                AsyncImage(
-                    model = channel.logo,
-                    contentDescription = null,
-                    modifier = Modifier.size(40.dp).clip(RoundedCornerShape(6.dp))
-                )
-            } else {
-                Text(
-                    text = channel.name.trim().take(1).uppercase(),
-                    style = MaterialTheme.typography.titleLarge,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f)
-                )
-            }
-        }
+        ImageOrInitial(
+            model = channel.logo,
+            name = channel.name,
+            textStyle = MaterialTheme.typography.titleLarge,
+            modifier = Modifier.size(40.dp).clip(RoundedCornerShape(6.dp))
+        )
         Spacer(Modifier.width(16.dp))
         Column(modifier = Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
+                // Feste Sendernummer (für die Direktwahl per Zifferntasten im Player).
+                if (number != null) {
+                    Text(
+                        text = number.toString(),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.labelLarge,
+                        modifier = Modifier.padding(end = 8.dp)
+                    )
+                }
                 if (isCurrent) {
                     Icon(
                         imageVector = Icons.Filled.PlayArrow,

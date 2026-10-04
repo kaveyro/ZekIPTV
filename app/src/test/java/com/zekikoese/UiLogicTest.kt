@@ -121,3 +121,55 @@ class GuideLogicTest {
         assertEquals(range.first, guideWindowFor(base, span, base - 5 * h, base - 2 * h, range.first, range.second))
     }
 }
+
+class UiPolishLogicTest {
+
+    @Test
+    fun playerBackGoesStepByStep() {
+        assertEquals(PlayerBackAction.CLEAR_NUMBER, playerBackAction(numberEntry = true, controlsVisible = true, isTv = true))
+        assertEquals(PlayerBackAction.HIDE_CONTROLS, playerBackAction(numberEntry = false, controlsVisible = true, isTv = true))
+        assertEquals(PlayerBackAction.EXIT, playerBackAction(numberEntry = false, controlsVisible = false, isTv = true))
+        // Handy: Steuerleiste ist fast immer sichtbar — Zurück beendet direkt.
+        assertEquals(PlayerBackAction.EXIT, playerBackAction(numberEntry = false, controlsVisible = true, isTv = false))
+    }
+
+    @Test
+    fun remainingTimeIsReadable() {
+        assertEquals("noch 1 min", remainingLabel(10_000))
+        assertEquals("noch 38 min", remainingLabel(38 * 60_000L))
+        assertEquals("noch 38 min", remainingLabel(37 * 60_000L + 1))
+        assertEquals("noch 1:12 h", remainingLabel(72 * 60_000L))
+    }
+
+    @Test
+    fun channelKeysAreUniqueAndStable() {
+        val a = Channel("A", "http://x/a")
+        val b = Channel("B", "http://x/b")
+        val aAgain = Channel("A HD", "http://x/a", group = "HD")
+        val keys = stableChannelKeys(listOf(a, b, aAgain))
+        assertEquals(listOf("http://x/a", "http://x/b", "http://x/a#2"), keys)
+        assertEquals(keys.size, keys.toSet().size)
+        // Ein neuer Sender davor verschiebt die Keys der anderen nicht.
+        val withNew = stableChannelKeys(listOf(Channel("N", "http://x/n"), a, b, aAgain))
+        assertEquals(keys, withNew.drop(1))
+    }
+
+    @Test
+    fun epgLabelNamesTheDay() {
+        // Kalender statt fester 24 h — sonst schlägt der Test an Zeitumstellungstagen fehl.
+        fun at(daysAgo: Int): Long = java.util.Calendar.getInstance().apply {
+            add(java.util.Calendar.DAY_OF_MONTH, -daysAgo)
+            set(java.util.Calendar.HOUR_OF_DAY, 6)
+            set(java.util.Calendar.MINUTE, 12)
+        }.timeInMillis
+        val now = at(0) + 60_000
+        assertEquals("heute 06:12", epgUpdatedLabel(at(0), now))
+        assertEquals("gestern 06:12", epgUpdatedLabel(at(1), now))
+        assertTrue(epgUpdatedLabel(at(3), now).matches(Regex("""\d\d\.\d\d\. 06:12""")))
+    }
+
+    @Test
+    fun backupNameContainsDate() {
+        assertTrue(backupFileName(System.currentTimeMillis()).matches(Regex("""zekiptv-backup-\d{4}-\d{2}-\d{2}\.json""")))
+    }
+}

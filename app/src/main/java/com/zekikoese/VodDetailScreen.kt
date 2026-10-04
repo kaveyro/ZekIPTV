@@ -58,6 +58,9 @@ import kotlinx.coroutines.launch
 fun VodDetailScreen(mainViewModel: MainViewModel) {
     val item by mainViewModel.selectedVod
     val info by mainViewModel.vodInfo
+    val infoState by mainViewModel.vodInfoState
+    // Ohne Beschreibung (Fehler oder leer) einen Hinweis statt endlosem „wird geladen“.
+    val plotFallback = if (infoState is ContentState.Loading) "Beschreibung wird geladen…" else "Keine Beschreibung verfügbar."
     val favorites by mainViewModel.favorites
     val resumePositions by mainViewModel.resumePositions
 
@@ -103,7 +106,8 @@ fun VodDetailScreen(mainViewModel: MainViewModel) {
                 info = info,
                 vodUrl = vodUrl,
                 resumeMs = resumeMs,
-                isFavorite = isFavorite
+                isFavorite = isFavorite,
+                plotFallback = plotFallback
             )
             PhoneBackButton(
                 onClick = { mainViewModel.closeVod() },
@@ -235,7 +239,7 @@ fun VodDetailScreen(mainViewModel: MainViewModel) {
             ) {
                 val plot = info?.plot
                 Text(
-                    text = plot ?: "Beschreibung wird geladen…",
+                    text = plot?.takeIf { it.isNotBlank() } ?: plotFallback,
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = if (plot != null) 0.85f else 0.5f)
                 )
@@ -269,7 +273,8 @@ private fun PhoneVodDetailContent(
     info: VodInfo?,
     vodUrl: String?,
     resumeMs: Long,
-    isFavorite: Boolean
+    isFavorite: Boolean,
+    plotFallback: String
 ) {
     Column(
         modifier = Modifier
@@ -352,7 +357,7 @@ private fun PhoneVodDetailContent(
 
         val plot = info?.plot
         Text(
-            text = plot ?: "Beschreibung wird geladen…",
+            text = plot?.takeIf { it.isNotBlank() } ?: plotFallback,
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onSurface.copy(alpha = if (plot != null) 0.85f else 0.5f)
         )

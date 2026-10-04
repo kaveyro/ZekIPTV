@@ -23,6 +23,8 @@ A modern Android IPTV player built with Kotlin and Jetpack Compose, optimized fo
   a hardware decoder
 - **Channel Favorites**: Mark and quickly access your favorite channels
 - **Parental PIN**: Lock hidden categories and backup import
+- **Category management**: Hide live, movie and series categories (with search and
+  show/hide all)
 - **TV-Optimized UI**: Designed for 10-foot interface with D-pad navigation
 - **Background Refresh**: Automatic playlist and EPG updates via WorkManager
 - **Channel Logos**: Automatic logo loading and caching with Coil
@@ -133,6 +135,14 @@ It bundles the [Jellyfin Media3 FFmpeg decoder](https://github.com/jellyfin/jell
 
 ## Version History
 
+- **1.10.1**: UI/UX pass — scroll position kept in movie/series grids and search after the
+  detail page, Back on Home no longer exits immediately (TV: focus to the rail, phone: press
+  twice), Back in the player hides the controls first, pull-to-refresh keeps the category,
+  initials for broken logos/posters, info bar with programme times and remaining time (VOD: end
+  time), channel name while typing a number, channel numbers in the lists, category manager for
+  live/movie/series categories, switch rows and EPG status in settings, feedback as snackbars,
+  update progress in the update dialog, confirmation before backup import, visible focus ring in
+  the light theme, screen stays on only while playing
 - **1.10.0**: TV-Guide (EPG grid with catch-up) and first-start assistant
 - **1.9.1**: Usability and design pass — catalog loading errors with retry instead of endless
   placeholders, confirmation before deleting playlists/EPG sources, validated input dialogs,

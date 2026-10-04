@@ -56,7 +56,6 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.coerceAtLeast
 import androidx.compose.ui.unit.coerceIn
 import androidx.compose.ui.unit.dp
-import coil.compose.AsyncImage
 import com.zekikoese.ui.LocalIsTv
 import com.zekikoese.ui.tvFocusFrame
 import kotlinx.coroutines.android.awaitFrame
@@ -85,6 +84,8 @@ private data class GuideDims(val channelWidth: Dp, val perMinute: Dp, val rowHei
 fun GuideScreen(mainViewModel: MainViewModel) {
     val isTv = LocalIsTv.current
     val channels by mainViewModel.visibleChannels
+    // Stabile Keys (Fokus/Position bleiben beim Kategoriewechsel erhalten).
+    val channelKeys = remember(channels) { stableChannelKeys(channels) }
     val groups by mainViewModel.groups
     val groupCounts by mainViewModel.groupCounts
     val allCount by mainViewModel.unhiddenChannelCount
@@ -261,7 +262,7 @@ fun GuideScreen(mainViewModel: MainViewModel) {
                             }
                         )
                 ) {
-                    itemsIndexed(channels) { index, channel ->
+                    itemsIndexed(channels, key = { index, _ -> channelKeys[index] }) { index, channel ->
                         val programmes = remember(channel, tick, rangeStart) {
                             programmesInRange(mainViewModel.programmesFor(channel), rangeStart, rangeEnd)
                         }
@@ -375,21 +376,12 @@ private fun GuideRow(
             val logoSize = if (isTv) 40.dp else 28.dp
             // Handy: ohne Logo kein Platzhalter — die schmale Spalte braucht den Platz für den Namen.
             if (isTv || channel.logo != null) {
-                Box(modifier = Modifier.size(logoSize), contentAlignment = Alignment.Center) {
-                    if (channel.logo != null) {
-                        AsyncImage(
-                            model = channel.logo,
-                            contentDescription = null,
-                            modifier = Modifier.size(logoSize).clip(RoundedCornerShape(6.dp))
-                        )
-                    } else {
-                        Text(
-                            text = channel.name.trim().take(1).uppercase(),
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f)
-                        )
-                    }
-                }
+                ImageOrInitial(
+                    model = channel.logo,
+                    name = channel.name,
+                    textStyle = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.size(logoSize).clip(RoundedCornerShape(6.dp))
+                )
                 Spacer(Modifier.width(if (isTv) 10.dp else 6.dp))
             }
             Column {

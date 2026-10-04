@@ -36,6 +36,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -77,7 +78,12 @@ private sealed interface SettingsDialog {
     data object AddEpgSource : SettingsDialog
     data object UnlockPin : SettingsDialog
     data object SetPin : SettingsDialog
+    data object ImportBackup : SettingsDialog
+    data class ManageCategories(val kind: CategoryKind) : SettingsDialog
 }
+
+/** Bereich, dessen Kategorien verwaltet werden. */
+private enum class CategoryKind { LIVE, VOD, SERIES }
 
 @OptIn(ExperimentalFoundationApi::class, ExperimentalLayoutApi::class)
 @Composable
@@ -94,7 +100,6 @@ fun SettingsScreen(mainViewModel: MainViewModel) {
     val tap = if (isTv) "OK" else "Antippen"
 
     var dialog by remember { mutableStateOf<SettingsDialog?>(null) }
-    var pinMessage by remember { mutableStateOf("") }
     val parentalPin by mainViewModel.parentalPin
     val parentalUnlocked by mainViewModel.parentalUnlocked
     val parentalLocked = parentalPin.isNotEmpty() && !parentalUnlocked
@@ -232,7 +237,12 @@ fun SettingsScreen(mainViewModel: MainViewModel) {
                     containerColor = MaterialTheme.colorScheme.secondaryContainer,
                     contentColor = MaterialTheme.colorScheme.onSecondaryContainer
                 )
-                TvButton(text = "EPG aktualisieren", onClick = { mainViewModel.refreshEpg() })
+                val epgLoading by mainViewModel.epgLoading
+                TvButton(
+                    text = if (epgLoading) "Wird geladen…" else "EPG aktualisieren",
+                    // Während des Ladens kein zweiter Abruf (der würde den laufenden abbrechen).
+                    onClick = { if (!epgLoading) mainViewModel.refreshEpg(notify = true) }
+                )
                 TvButton(
                     text = "Cache löschen",
                     onClick = { dialog = SettingsDialog.ClearEpgCache },
@@ -241,8 +251,22 @@ fun SettingsScreen(mainViewModel: MainViewModel) {
                 )
             }
         }
-        if (epgInfo.isNotEmpty()) {
-            item(key = "settings_11") { Text(epgInfo, style = MaterialTheme.typography.bodyMedium) }
+        if (epgSources.isNotEmpty()) {
+            item(key = "settings_11") {
+                val epgLoading by mainViewModel.epgLoading
+                val updatedAt by mainViewModel.epgUpdatedAt
+                // Stand des Programmführers — der automatische Abruf läuft ohne sichtbare Meldung.
+                val text = when {
+                    epgLoading -> "EPG wird geladen…"
+                    updatedAt != null -> "Stand: ${epgUpdatedLabel(updatedAt!!, System.currentTimeMillis())}" +
+                        (epgInfo.takeIf { it.isNotEmpty() }?.let { " · $it" } ?: "")
+                    else -> "Noch kein Programm geladen."
+                }
+                Column {
+                    Text(text, style = MaterialTheme.typography.bodyMedium)
+                    Hint("Wird automatisch alle 12 Stunden aktualisiert (auch im Hintergrund).")
+                }
+            }
         }
 
         // ---------- Anbieter-Konto (Xtream) ----------
@@ -303,70 +327,69 @@ fun SettingsScreen(mainViewModel: MainViewModel) {
         item(key = "settings_14") { SectionTitle("Wiedergabe", icon = Icons.Filled.PlayArrow) }
         item(key = "settings_15") {
             val autoplay by mainViewModel.autoplayLast
-            ToggleRow(
-                label = "Letzten Sender beim Start abspielen:",
-                enabled = autoplay,
-                onChange = mainViewModel::setAutoplayLast
+            SwitchRow(
+                title = "Letzten Sender beim Start abspielen",
+                checked = autoplay,
+                onToggle = { mainViewModel.setAutoplayLast(!autoplay) }
             )
         }
         item(key = "settings_16") {
             val timeshiftOn by mainViewModel.timeshift
-            ToggleRow(
-                label = "Timeshift (Live-TV pausieren/zurückspulen):",
-                enabled = timeshiftOn,
-                onChange = mainViewModel::setTimeshift
-            )
-        }
-        item(key = "settings_17") {
-            Hint(
-                "Nimmt Live-Sender während des Schauens auf (bis 30 min, max. 1 GB Zwischenspeicher) — " +
+            SwitchRow(
+                title = "Timeshift (Live-TV pausieren/zurückspulen)",
+                subtitle = "Nimmt Live-Sender während des Schauens auf (bis 30 min, max. 1 GB Zwischenspeicher) — " +
                     "Pause und Zurückspulen wie beim Festplattenrekorder. Der Senderstart dauert ca. 2 s länger. " +
-                    "HLS-Sender (.m3u8) nutzen das Zeitfenster des Anbieters."
+                    "HLS-Sender (.m3u8) nutzen das Zeitfenster des Anbieters.",
+                checked = timeshiftOn,
+                onToggle = { mainViewModel.setTimeshift(!timeshiftOn) }
             )
         }
         // Automatische Bildwiederholrate — nur sinnvoll am Fernseher.
         if (isTv) {
             item(key = "settings_18") {
                 val afr by mainViewModel.autoFrameRate
-                ToggleRow(
-                    label = "Bildwiederholrate an Video anpassen:",
-                    enabled = afr,
-                    onChange = mainViewModel::setAutoFrameRate
-                )
-            }
-            item(key = "settings_19") {
-                Hint(
-                    "Schaltet den Fernseher z. B. für deutsches TV auf 50 Hz und für Filme auf 24 Hz — " +
-                        "flüssigere Schwenks. Beim Umschalten kann das Bild kurz schwarz werden."
+                SwitchRow(
+                    title = "Bildwiederholrate an Video anpassen",
+                    subtitle = "Schaltet den Fernseher z. B. für deutsches TV auf 50 Hz und für Filme auf 24 Hz — " +
+                        "flüssigere Schwenks. Beim Umschalten kann das Bild kurz schwarz werden.",
+                    checked = afr,
+                    onToggle = { mainViewModel.setAutoFrameRate(!afr) }
                 )
             }
         }
 
-        // ---------- Live-TV-Kategorien ----------
-        if (allGroups.isNotEmpty()) {
-            item(key = "settings_20") { SectionTitle("Live-TV-Kategorien", icon = Icons.Filled.Star) }
-            item(key = "settings_21") {
-                Hint(
-                    if (parentalLocked) {
-                        "Durch die Jugendschutz-PIN gesperrt (siehe unten)."
-                    } else {
-                        "$tap blendet eine Kategorie aus bzw. wieder ein. Ausgeblendete Kategorien (✕) " +
-                            "erscheinen weder in Live-TV noch in der Suche."
-                    }
+        // ---------- Kategorien (eigener Dialog statt hunderter Chips) ----------
+        val xtreamForCategories by mainViewModel.xtreamAvailable
+        if (allGroups.isNotEmpty() || xtreamForCategories) {
+            item(key = "settings_20") { SectionTitle("Kategorien", icon = Icons.Filled.Star) }
+            fun openManager(kind: CategoryKind) {
+                // Mit Jugendschutz-PIN erst entsperren, dann verwalten.
+                dialog = if (parentalLocked) SettingsDialog.UnlockPin else SettingsDialog.ManageCategories(kind)
+            }
+            val lockNote = if (parentalLocked) " · gesperrt (PIN)" else ""
+            if (allGroups.isNotEmpty()) item(key = "settings_21") {
+                SettingsRow(
+                    title = "Live-TV-Kategorien verwalten…",
+                    subtitle = "${hiddenGroups.count { it in allGroups }} von ${allGroups.size} ausgeblendet$lockNote",
+                    onClick = { openManager(CategoryKind.LIVE) }
                 )
             }
-            if (!parentalLocked) item(key = "settings_22") {
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    allGroups.forEach { group ->
-                        val hidden = group in hiddenGroups
-                        GroupChip(
-                            label = if (hidden) "✕ $group" else group,
-                            selected = !hidden
-                        ) { mainViewModel.toggleHiddenGroup(group) }
-                    }
+            if (xtreamForCategories) {
+                item(key = "settings_22") {
+                    val hiddenVod by mainViewModel.hiddenVodCategories
+                    SettingsRow(
+                        title = "Film-Kategorien verwalten…",
+                        subtitle = "${hiddenVod.size} ausgeblendet$lockNote",
+                        onClick = { openManager(CategoryKind.VOD) }
+                    )
+                }
+                item(key = "settings_22b") {
+                    val hiddenSeries by mainViewModel.hiddenSeriesCategories
+                    SettingsRow(
+                        title = "Serien-Kategorien verwalten…",
+                        subtitle = "${hiddenSeries.size} ausgeblendet$lockNote",
+                        onClick = { openManager(CategoryKind.SERIES) }
+                    )
                 }
             }
         }
@@ -430,10 +453,8 @@ fun SettingsScreen(mainViewModel: MainViewModel) {
         }
         item(key = "settings_30") {
             Hint(
-                pinMessage.ifEmpty {
-                    "Mit PIN lassen sich ausgeblendete Kategorien nur nach Eingabe wieder einblenden; " +
-                        "ihre Sender erscheinen auch nicht auf Home. Der Backup-Import ist dann ebenfalls gesperrt."
-                }
+                "Mit PIN lassen sich ausgeblendete Kategorien nur nach Eingabe wieder einblenden; " +
+                    "ihre Sender erscheinen auch nicht auf Home. Der Backup-Import ist dann ebenfalls gesperrt."
             )
         }
 
@@ -448,32 +469,24 @@ fun SettingsScreen(mainViewModel: MainViewModel) {
                     text = "Backup exportieren",
                     onClick = {
                         try {
-                            exportLauncher.launch("zekiptv-backup.json")
+                            exportLauncher.launch(backupFileName(System.currentTimeMillis()))
                         } catch (e: ActivityNotFoundException) {
                             mainViewModel.exportBackup()
                         }
                     }
                 )
                 TvButton(
-                    text = "Backup importieren",
-                    onClick = {
-                        try {
-                            importLauncher.launch(arrayOf("application/json", "text/plain", "application/octet-stream"))
-                        } catch (e: ActivityNotFoundException) {
-                            mainViewModel.importBackup()
-                        }
-                    }
+                    text = "Backup importieren…",
+                    // Erst nachfragen: der Import ersetzt Playlists, Favoriten und Einstellungen.
+                    onClick = { dialog = SettingsDialog.ImportBackup }
                 )
             }
         }
         item(key = "settings_33") {
-            val backupInfo by mainViewModel.backupInfo
             Hint(
-                backupInfo.ifEmpty {
-                    "Sichert Playlists, Favoriten, EPG-Quellen und Einstellungen als JSON-Datei " +
-                        "(Speicherort wählbar; ohne Dateiauswahl im App-Ordner). Achtung: Die Datei " +
-                        "enthält die Playlist-URLs inklusive Zugangsdaten."
-                }
+                "Sichert Playlists, Favoriten, EPG-Quellen und Einstellungen als JSON-Datei " +
+                    "(Speicherort wählbar; ohne Dateiauswahl im App-Ordner). Achtung: Die Datei " +
+                    "enthält die Playlist-URLs inklusive Zugangsdaten."
             )
         }
 
@@ -578,7 +591,7 @@ fun SettingsScreen(mainViewModel: MainViewModel) {
             confirmText = "PIN entfernen",
             onConfirm = {
                 mainViewModel.setParentalPin("")
-                pinMessage = "Jugendschutz deaktiviert."
+                mainViewModel.showMessage("Jugendschutz deaktiviert.")
             },
             onDismiss = { dialog = null }
         )
@@ -596,7 +609,7 @@ fun SettingsScreen(mainViewModel: MainViewModel) {
             confirmTwice = false,
             onSubmit = { pin ->
                 if (mainViewModel.unlockParental(pin)) {
-                    pinMessage = "Entsperrt bis zum nächsten App-Start."
+                    mainViewModel.showMessage("Entsperrt bis zum nächsten App-Start.")
                     null
                 } else {
                     "Falsche PIN."
@@ -613,13 +626,68 @@ fun SettingsScreen(mainViewModel: MainViewModel) {
                     "Die PIN braucht mindestens $MIN_PIN_LENGTH Ziffern."
                 } else {
                     mainViewModel.setParentalPin(pin)
-                    pinMessage = "PIN gespeichert."
+                    mainViewModel.showMessage("PIN gespeichert.")
                     null
                 }
             },
             onDismiss = { dialog = null }
         )
+        SettingsDialog.ImportBackup -> ConfirmDialog(
+            title = "Backup importieren?",
+            message = "Playlists, Favoriten, EPG-Quellen und Einstellungen werden durch den Inhalt " +
+                "der Sicherung ersetzt.",
+            confirmText = "Datei wählen",
+            onConfirm = {
+                try {
+                    importLauncher.launch(arrayOf("application/json", "text/plain", "application/octet-stream"))
+                } catch (e: ActivityNotFoundException) {
+                    mainViewModel.importBackup()
+                }
+            },
+            onDismiss = { dialog = null }
+        )
+        is SettingsDialog.ManageCategories -> CategoryManager(mainViewModel, current.kind) { dialog = null }
         null -> Unit
+    }
+}
+
+/** Kategorie-Verwaltung für einen Bereich — die Daten kommen direkt aus dem ViewModel. */
+@Composable
+private fun CategoryManager(mainViewModel: MainViewModel, kind: CategoryKind, onDismiss: () -> Unit) {
+    when (kind) {
+        CategoryKind.LIVE -> {
+            val groups by mainViewModel.allGroups
+            val counts by mainViewModel.groupCounts
+            val hidden by mainViewModel.hiddenGroups
+            CategoryManagerDialog(
+                title = "Live-TV-Kategorien",
+                categories = groups.map { ManagedCategory(it, it, counts[it]) },
+                hidden = hidden,
+                loading = false,
+                onSetHidden = mainViewModel::setGroupsHidden,
+                onDismiss = onDismiss
+            )
+        }
+        CategoryKind.VOD, CategoryKind.SERIES -> {
+            // Kataloge werden sonst erst beim Öffnen von Filme/Serien geladen.
+            LaunchedEffect(Unit) { mainViewModel.ensureCatalogs() }
+            val isVod = kind == CategoryKind.VOD
+            val categories by if (isVod) mainViewModel.vodCategories else mainViewModel.seriesCategories
+            val counts by if (isVod) mainViewModel.vodCategoryCounts else mainViewModel.seriesCategoryCounts
+            val hidden by if (isVod) mainViewModel.hiddenVodCategories else mainViewModel.hiddenSeriesCategories
+            val state by if (isVod) mainViewModel.vodState else mainViewModel.seriesState
+            CategoryManagerDialog(
+                title = if (isVod) "Film-Kategorien" else "Serien-Kategorien",
+                categories = categories.map { (id, name) -> ManagedCategory(id, name, counts[id]) },
+                hidden = hidden,
+                loading = state is ContentState.Loading,
+                onSetHidden = { keys, hide ->
+                    if (isVod) mainViewModel.setVodCategoriesHidden(keys, hide)
+                    else mainViewModel.setSeriesCategoriesHidden(keys, hide)
+                },
+                onDismiss = onDismiss
+            )
+        }
     }
 }
 
@@ -631,21 +699,6 @@ private fun Hint(text: String) {
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant
     )
-}
-
-/** An/Aus-Auswahl; FlowRow, damit die Chips im Hochformat umbrechen statt aus dem Bild zu rutschen. */
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-private fun ToggleRow(label: String, enabled: Boolean, onChange: (Boolean) -> Unit) {
-    FlowRow(
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-        itemVerticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(label, style = MaterialTheme.typography.bodyMedium)
-        GroupChip("An", selected = enabled) { onChange(true) }
-        GroupChip("Aus", selected = !enabled) { onChange(false) }
-    }
 }
 
 @Composable

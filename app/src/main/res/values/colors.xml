@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Fensterhintergründe = Hintergrundfarben des Compose-Themes (ui/theme/Color.kt). -->
+    <color name="window_dark">#FF0A0E17</color>
+    <color name="window_light">#FFF4F6FA</color>
+    <!-- Design „System“: folgt dem Dunkelmodus des Geräts (values-night). -->
+    <color name="window_system">#FFF4F6FA</color>
+</resources>

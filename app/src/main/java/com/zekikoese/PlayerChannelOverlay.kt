@@ -75,6 +75,7 @@ fun PlayerChannelOverlay(
         // Gemerkte Gruppe validieren — sie kann inzwischen ausgeblendet/entfernt worden sein.
         val group = overlayGroup?.takeIf { it in groups }
         val channels = mainViewModel.channelsForGroup(group)
+        val channelKeys = remember(channels) { stableChannelKeys(channels) }
         val favorites by mainViewModel.favorites
 
         val listState = rememberLazyListState()
@@ -141,14 +142,15 @@ fun PlayerChannelOverlay(
                         }
                     }
             ) {
-                // Kein URL-Key: reale Playlists enthalten denselben Stream mehrfach.
-                itemsIndexed(channels) { index, channel ->
+                // URL-Keys mit Zähler für Wiederholungen (reale Playlists enthalten Streams mehrfach).
+                itemsIndexed(channels, key = { index, _ -> channelKeys[index] }) { index, channel ->
                     ChannelRow(
                         channel = channel,
                         isFavorite = channel.url in favorites,
                         epg = mainViewModel.epgFor(channel),
                         // Laufenden Sender markieren — der Fokus allein geht beim Scrollen verloren.
                         isCurrent = channel.url == currentUrl,
+                        number = mainViewModel.channelNumberOf(channel),
                         modifier = if (index == focusTarget) {
                             Modifier.focusRequester(rowFocusRequester)
                         } else Modifier,

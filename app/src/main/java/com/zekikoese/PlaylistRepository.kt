@@ -2,6 +2,7 @@ package com.zekikoese
 
 import android.content.Context
 import android.net.Uri
+import android.provider.OpenableColumns
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
@@ -55,6 +56,8 @@ class PlaylistRepository(private val context: Context) {
         val RECENT_CHANNELS = stringPreferencesKey("recent_channels_json") // ["url", ...] neueste zuerst
         val WATCH_META = stringPreferencesKey("watch_meta_json") // {url: {title, poster, ts, duration}}
         val HIDDEN_GROUPS = stringSetPreferencesKey("hidden_groups") // ausgeblendete Live-Kategorien
+        val HIDDEN_VOD = stringSetPreferencesKey("hidden_vod_categories") // ausgeblendete Film-Kategorien (IDs)
+        val HIDDEN_SERIES = stringSetPreferencesKey("hidden_series_categories") // ausgeblendete Serien-Kategorien (IDs)
         val SEARCH_HISTORY = stringPreferencesKey("search_history_json") // ["query", ...] neueste zuerst
         val UI_MODE = stringPreferencesKey("ui_mode") // auto | tv | phone
         val RESIZE_MODE = stringPreferencesKey("resize_mode") // fit | zoom | fill
@@ -105,6 +108,10 @@ class PlaylistRepository(private val context: Context) {
     }
 
     val hiddenGroupsFlow: Flow<Set<String>> = context.dataStore.data.map { it[Keys.HIDDEN_GROUPS] ?: emptySet() }
+
+    val hiddenVodCategoriesFlow: Flow<Set<String>> = context.dataStore.data.map { it[Keys.HIDDEN_VOD] ?: emptySet() }
+
+    val hiddenSeriesCategoriesFlow: Flow<Set<String>> = context.dataStore.data.map { it[Keys.HIDDEN_SERIES] ?: emptySet() }
 
     val searchHistoryFlow: Flow<List<String>> = context.dataStore.data.map { prefs ->
         prefs[Keys.SEARCH_HISTORY]?.let(::decodeStringList) ?: emptyList()
@@ -265,12 +272,17 @@ class PlaylistRepository(private val context: Context) {
         context.dataStore.edit { it[Keys.LAST_CHANNEL] = url }
     }
 
-    /** Blendet eine Live-Kategorie aus bzw. wieder ein. */
-    suspend fun toggleHiddenGroup(group: String) {
-        context.dataStore.edit { prefs ->
-            val current = prefs[Keys.HIDDEN_GROUPS] ?: emptySet()
-            prefs[Keys.HIDDEN_GROUPS] = if (group in current) current - group else current + group
-        }
+    /** Ersetzt die ausgeblendeten Live-Kategorien (z. B. „Alle ausblenden“). */
+    suspend fun saveHiddenGroups(groups: Set<String>) {
+        context.dataStore.edit { it[Keys.HIDDEN_GROUPS] = groups }
+    }
+
+    suspend fun saveHiddenVodCategories(ids: Set<String>) {
+        context.dataStore.edit { it[Keys.HIDDEN_VOD] = ids }
+    }
+
+    suspend fun saveHiddenSeriesCategories(ids: Set<String>) {
+        context.dataStore.edit { it[Keys.HIDDEN_SERIES] = ids }
     }
 
     /** Merkt einen Suchbegriff für den Suchverlauf (Dedupe, neueste zuerst, begrenzt). */
@@ -419,6 +431,8 @@ class PlaylistRepository(private val context: Context) {
             put("recentChannels", prefs[Keys.RECENT_CHANNELS] ?: "[]")
             put("watchMeta", prefs[Keys.WATCH_META] ?: "{}")
             put("hiddenGroups", JSONArray((prefs[Keys.HIDDEN_GROUPS] ?: emptySet()).toList()))
+            put("hiddenVodCategories", JSONArray((prefs[Keys.HIDDEN_VOD] ?: emptySet()).toList()))
+            put("hiddenSeriesCategories", JSONArray((prefs[Keys.HIDDEN_SERIES] ?: emptySet()).toList()))
             put("uiMode", prefs[Keys.UI_MODE] ?: "auto")
             put("resizeMode", prefs[Keys.RESIZE_MODE] ?: "fit")
             put("autoFrameRate", prefs[Keys.AUTO_FRAME_RATE] ?: "false")
@@ -431,7 +445,7 @@ class PlaylistRepository(private val context: Context) {
             val out = context.contentResolver.openOutputStream(target, "wt")
                 ?: throw java.io.IOException("Datei kann nicht geschrieben werden")
             out.bufferedWriter().use { it.write(json) }
-            target.lastPathSegment ?: "gewählte Datei"
+            displayName(target)
         } else {
             backupFile.writeText(json)
             backupFile.absolutePath
@@ -462,6 +476,8 @@ class PlaylistRepository(private val context: Context) {
             prefs[Keys.RECENT_CHANNELS] = root.optString("recentChannels", "[]")
             prefs[Keys.WATCH_META] = root.optString("watchMeta", "{}")
             prefs[Keys.HIDDEN_GROUPS] = jsonToSet("hiddenGroups")
+            prefs[Keys.HIDDEN_VOD] = jsonToSet("hiddenVodCategories")
+            prefs[Keys.HIDDEN_SERIES] = jsonToSet("hiddenSeriesCategories")
             prefs[Keys.UI_MODE] = root.optString("uiMode", "auto")
             prefs[Keys.RESIZE_MODE] = root.optString("resizeMode", "fit")
             prefs[Keys.AUTO_FRAME_RATE] = root.optString("autoFrameRate", "false")
@@ -469,7 +485,20 @@ class PlaylistRepository(private val context: Context) {
             prefs[Keys.XTREAM_LINKS] = root.optString("xtreamLinks", "{}")
             prefs[Keys.XTREAM_DISMISSED] = jsonToSet("xtreamDismissed")
         }
-        source?.lastPathSegment ?: backupFile.absolutePath
+        source?.let(::displayName) ?: backupFile.absolutePath
+    }
+
+    /** Lesbarer Dateiname einer gewählten Datei (statt „primary:Download/…“ aus der URI). */
+    private fun displayName(uri: Uri): String =
+        runCatching {
+            context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+                if (c.moveToFirst()) c.getString(0) else null
+            }
+        }.getOrNull() ?: uri.lastPathSegment?.substringAfterLast('/') ?: "gewählte Datei"
+
+    /** Zeitpunkt des gespeicherten EPG-Stands (für „Stand: heute 06:12“); null = kein Cache. */
+    suspend fun epgSavedAt(): Long? = withContext(Dispatchers.IO) {
+        runCatching { database.epgSavedAt() }.getOrNull()
     }
 
     private fun encodePlaylists(playlists: List<PlaylistEntry>): String {

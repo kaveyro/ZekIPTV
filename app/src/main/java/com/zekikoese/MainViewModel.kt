@@ -35,8 +35,18 @@ sealed interface PlaylistUiState {
 /** Ziel-Bereiche der linken Navigations-Rail. */
 enum class NavDestination { SEARCH, HOME, LIVE, GUIDE, MOVIES, SERIES, SETTINGS }
 
-/** "Jetzt läuft"-Info eines Senders: aktueller/nächster Titel + Fortschritt (0..1). */
-data class EpgNowNext(val now: String?, val next: String?, val progress: Float?)
+/**
+ * "Jetzt läuft"-Info eines Senders: aktueller/nächster Titel + Fortschritt (0..1), dazu die
+ * Zeiten für die Info-Leiste im Player (Beginn/Ende der laufenden, Beginn der nächsten Sendung).
+ */
+data class EpgNowNext(
+    val now: String?,
+    val next: String?,
+    val progress: Float?,
+    val nowStartMs: Long? = null,
+    val nowStopMs: Long? = null,
+    val nextStartMs: Long? = null
+)
 
 /** Eintrag der "Weiter schauen"-Reihe auf dem Home-Bildschirm. */
 data class ContinueWatchingItem(
@@ -71,6 +81,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val uiModeOverride = mutableStateOf("auto") // auto | tv | phone (Bedienoberfläche)
     val epgSources = mutableStateOf<Set<String>>(emptySet())
     val epgInfo = mutableStateOf("")
+    val epgLoading = mutableStateOf(false)
+    val epgUpdatedAt = mutableStateOf<Long?>(null) // Zeitpunkt des aktuellen EPG-Stands
     val autoplayLast = mutableStateOf(false)
     val resizeMode = mutableStateOf("fit") // fit | zoom | fill (Bildformat im Player)
     val autoFrameRate = mutableStateOf(false) // TV: Bildwiederholrate an das Video anpassen
@@ -145,6 +157,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     // VOD-Detail-Seite
     val selectedVod = mutableStateOf<VodItem?>(null)
     val vodInfo = mutableStateOf<VodInfo?>(null)
+    val vodInfoState = mutableStateOf<ContentState>(ContentState.Idle)
 
     // Programmführer (Tagesprogramm eines Senders)
     val epgChannel = mutableStateOf<Channel?>(null)
@@ -155,9 +168,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     // Liste, aus der die Wiedergabe gestartet wurde (Live-Kategorie, Favoriten, Overlay …) —
     // darin wird gezappt, unabhängig davon, welche Kategorie im Live-Bereich gewählt ist.
     private var zapList: List<Channel> = emptyList()
-
-    // Backup-Status für die Einstellungen
-    val backupInfo = mutableStateOf("")
 
     // Wiedergabe (VOD/Episoden; Live läuft über selectedChannel)
     val playingMedia = mutableStateOf<PlayingMedia?>(null)
@@ -191,6 +201,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     // Ausgeblendete Live-Kategorien (Einstellungen) — erscheinen weder im Filter noch in "Alle"/Suche.
     val hiddenGroups = mutableStateOf<Set<String>>(emptySet())
+    // Ausgeblendete Film-/Serien-Kategorien (Kategorie-IDs des Anbieters).
+    val hiddenVodCategories = mutableStateOf<Set<String>>(emptySet())
+    val hiddenSeriesCategories = mutableStateOf<Set<String>>(emptySet())
 
     // Suchverlauf (letzte Suchbegriffe, neueste zuerst).
     val searchHistory = mutableStateOf<List<String>>(emptyList())
@@ -210,6 +223,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val pendingVodFocus = mutableStateOf(false)
     val pendingSeriesFocus = mutableStateOf(false)
     val pendingHomeFocus = mutableStateOf(true) // App-Start: Fokus auf den Inhalt statt auf die Rail
+
+    // Scroll-Positionen (Index, Offset) — der Hauptbildschirm wird während Detailseite/Player
+    // verworfen; ohne diese Werte stünden Raster und Suche danach wieder ganz oben.
+    var vodScroll: Pair<Int, Int> = 0 to 0
+    var seriesScroll: Pair<Int, Int> = 0 to 0
+    var searchScroll: Triple<String, Int, Int> = Triple("", 0, 0) // (Suchbegriff, Index, Offset)
+
+    // Suche: zuletzt geöffneter Treffer (Key) — nach Detailseite/Player wieder fokussieren (TV).
+    var searchFocusKey: String? = null
+    val pendingSearchFocus = mutableStateOf(false)
 
     // Immersiver Hintergrund: URL des aktuell fokussierten Elements (Logo/Poster).
     val focusedBackdrop = mutableStateOf<String?>(null)
@@ -276,9 +299,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Nach Kategorie gefilterte Filme (FAV_CATEGORY = nur Favoriten). */
     val visibleVod: State<List<VodItem>> = derivedStateOf {
         val category = selectedVodCategory.value
+        val hidden = hiddenVodCategories.value
         vodItems.value.filter { item ->
             when (category) {
-                null -> true
+                null -> item.categoryId == null || item.categoryId !in hidden
                 FAV_CATEGORY -> vodFavKey(item) in favorites.value
                 else -> item.categoryId == category
             }
@@ -288,13 +312,34 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Nach Kategorie gefilterte Serien (FAV_CATEGORY = nur Favoriten). */
     val visibleSeries: State<List<SeriesItem>> = derivedStateOf {
         val category = selectedSeriesCategory.value
+        val hidden = hiddenSeriesCategories.value
         seriesItems.value.filter { item ->
             when (category) {
-                null -> true
+                null -> item.categoryId == null || item.categoryId !in hidden
                 FAV_CATEGORY -> seriesFavKey(item) in favorites.value
                 else -> item.categoryId == category
             }
         }
+    }
+
+    /** Film-Kategorien ohne die ausgeblendeten (für Kategorie-Spalte und Auswahl). */
+    val shownVodCategories: State<Map<String, String>> = derivedStateOf {
+        vodCategories.value.filterKeys { it !in hiddenVodCategories.value }
+    }
+
+    /** Serien-Kategorien ohne die ausgeblendeten. */
+    val shownSeriesCategories: State<Map<String, String>> = derivedStateOf {
+        seriesCategories.value.filterKeys { it !in hiddenSeriesCategories.value }
+    }
+
+    /** Anzahl der Filme unter „Alle“ (ohne ausgeblendete Kategorien). */
+    val shownVodCount: State<Int> = derivedStateOf {
+        vodItems.value.count { it.categoryId == null || it.categoryId !in hiddenVodCategories.value }
+    }
+
+    /** Anzahl der Serien unter „Alle“ (ohne ausgeblendete Kategorien). */
+    val shownSeriesCount: State<Int> = derivedStateOf {
+        seriesItems.value.count { it.categoryId == null || it.categoryId !in hiddenSeriesCategories.value }
     }
 
     /** Titelanzahl je Film-Kategorie (für die Kategorie-Spalte). */
@@ -368,13 +413,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val searchVod: State<List<VodItem>> = derivedStateOf {
         val query = searchQuery.value.trim()
         if (query.isEmpty()) emptyList()
-        else vodItems.value.filter { it.name.contains(query, ignoreCase = true) }.take(50)
+        else vodItems.value
+            .filter { it.categoryId == null || it.categoryId !in hiddenVodCategories.value }
+            .filter { it.name.contains(query, ignoreCase = true) }.take(50)
     }
 
     val searchSeries: State<List<SeriesItem>> = derivedStateOf {
         val query = searchQuery.value.trim()
         if (query.isEmpty()) emptyList()
-        else seriesItems.value.filter { it.name.contains(query, ignoreCase = true) }.take(50)
+        else seriesItems.value
+            .filter { it.categoryId == null || it.categoryId !in hiddenSeriesCategories.value }
+            .filter { it.name.contains(query, ignoreCase = true) }.take(50)
     }
 
     init {
@@ -408,6 +457,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 allChannels.value = saved
                 uiState.value = PlaylistUiState.Success
                 pendingListFocus.value = true
+                loadedUrl = url.value
                 checkXtreamSuggestion(url.value, saved)
                 requestLocalNetworkIfNeeded(streamSample(saved) + epgSources.value)
             }
@@ -418,7 +468,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             if (cached != null) {
                 setEpg(cached.first, cached.second)
                 epgTick.value = System.currentTimeMillis()
-                epgInfo.value = "EPG aus Cache (${cached.first.values.sumOf { it.size }} Sendungen)."
+                epgUpdatedAt.value = repository.epgSavedAt()
+                epgInfo.value = "${cached.first.values.sumOf { it.size }} Sendungen im Cache"
             } else if (saved.isNotEmpty()) {
                 refreshEpg()
             }
@@ -451,6 +502,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         // Ausgeblendete Kategorien + Suchverlauf laufend beobachten.
         viewModelScope.launch {
             repository.hiddenGroupsFlow.collect { hiddenGroups.value = it }
+        }
+        viewModelScope.launch {
+            repository.hiddenVodCategoriesFlow.collect { ids ->
+                hiddenVodCategories.value = ids
+                if (selectedVodCategory.value in ids) selectedVodCategory.value = null
+            }
+        }
+        viewModelScope.launch {
+            repository.hiddenSeriesCategoriesFlow.collect { ids ->
+                hiddenSeriesCategories.value = ids
+                if (selectedSeriesCategory.value in ids) selectedSeriesCategory.value = null
+            }
         }
         viewModelScope.launch {
             repository.searchHistoryFlow.collect { searchHistory.value = it }
@@ -494,14 +557,39 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         selectedGroup.value = group
     }
 
-    /** Blendet eine Live-Kategorie aus bzw. ein; aktive Filter auf die Kategorie werden gelöst. */
-    fun toggleHiddenGroup(group: String) {
+    /** Live-Kategorien aus- ([hide] = true) bzw. einblenden — mehrere auf einmal, ein Speichervorgang. */
+    fun setGroupsHidden(groups: Collection<String>, hide: Boolean) {
         if (parentalLocked) return
-        if (group !in hiddenGroups.value) {
-            if (selectedGroup.value == group) selectedGroup.value = null
-            if (playerOverlayGroup.value == group) playerOverlayGroup.value = null
-        }
-        viewModelScope.launch { repository.toggleHiddenGroup(group) }
+        val updated = if (hide) hiddenGroups.value + groups else hiddenGroups.value - groups.toSet()
+        if (selectedGroup.value in updated) selectedGroup.value = null
+        if (playerOverlayGroup.value in updated) playerOverlayGroup.value = null
+        hiddenGroups.value = updated
+        viewModelScope.launch { repository.saveHiddenGroups(updated) }
+    }
+
+    /** Film-Kategorien aus- ([hide] = true) bzw. einblenden. */
+    fun setVodCategoriesHidden(ids: Collection<String>, hide: Boolean) {
+        if (parentalLocked) return
+        val updated = if (hide) hiddenVodCategories.value + ids else hiddenVodCategories.value - ids.toSet()
+        hiddenVodCategories.value = updated
+        if (selectedVodCategory.value in updated) selectedVodCategory.value = null
+        viewModelScope.launch { repository.saveHiddenVodCategories(updated) }
+    }
+
+    /** Serien-Kategorien aus- ([hide] = true) bzw. einblenden. */
+    fun setSeriesCategoriesHidden(ids: Collection<String>, hide: Boolean) {
+        if (parentalLocked) return
+        val updated = if (hide) hiddenSeriesCategories.value + ids else hiddenSeriesCategories.value - ids.toSet()
+        hiddenSeriesCategories.value = updated
+        if (selectedSeriesCategory.value in updated) selectedSeriesCategory.value = null
+        viewModelScope.launch { repository.saveHiddenSeriesCategories(updated) }
+    }
+
+    /** Film-/Serien-Kataloge laden, falls noch nicht geschehen (für die Kategorie-Verwaltung). */
+    fun ensureCatalogs() {
+        if (xtream == null) return
+        if (vodItems.value.isEmpty()) loadVod()
+        if (seriesItems.value.isEmpty()) loadSeries()
     }
 
     /** Kanäle einer Gruppe (für die Senderlisten-Overlay im Player, unabhängig vom globalen Filter). */
@@ -704,13 +792,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     /** Sucht nach einer neueren Version; [manual] = vom Nutzer ausgelöst (dann immer Rückmeldung). */
     fun checkForUpdates(manual: Boolean) {
         if (updateJob?.isActive == true) return
-        if (manual) updateStatus.value = "Suche nach Updates…"
+        if (manual) showMessage("Suche nach Updates…")
         updateJob = viewModelScope.launch {
             val result = runCatching { withContext(Dispatchers.IO) { UpdateChecker.fetchLatest() } }
             repository.saveLastUpdateCheck(System.currentTimeMillis())
             val release = result.getOrNull()
             when {
-                result.isFailure -> if (manual) updateStatus.value = "Update-Prüfung fehlgeschlagen: ${result.exceptionOrNull()?.message}"
+                result.isFailure -> if (manual) showMessage("Update-Prüfung fehlgeschlagen: ${result.exceptionOrNull()?.message}")
                 release != null && UpdateChecker.isNewer(release.version, BuildConfig.VERSION_NAME) -> {
                     availableUpdate.value = release
                     updateStatus.value = ""
@@ -719,7 +807,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 else -> {
                     availableUpdate.value = null
-                    if (manual) updateStatus.value = "ZekIPTV ist auf dem neuesten Stand (${BuildConfig.VERSION_NAME})."
+                    if (manual) showMessage("ZekIPTV ist auf dem neuesten Stand (${BuildConfig.VERSION_NAME}).")
                 }
             }
         }
@@ -727,6 +815,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun dismissUpdateDialog() {
         updateDialog.value = false
+        // Ein laufender Download geht im Hintergrund weiter; der Fortschritt steht in den Einstellungen.
+        if (updateInProgress.value) return
         val version = availableUpdate.value?.version ?: return
         viewModelScope.launch { repository.saveDismissedUpdate(version) }
     }
@@ -735,9 +825,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun installUpdate() {
         val release = availableUpdate.value ?: return
         val context = getApplication<Application>()
-        updateDialog.value = false
         if (!UpdateChecker.canInstall(context)) {
-            updateStatus.value = "Bitte „Unbekannte Apps installieren“ für ZekIPTV erlauben und erneut tippen."
+            updateStatus.value = "Bitte „Unbekannte Apps installieren“ für ZekIPTV erlauben, dann erneut installieren."
             runCatching { UpdateChecker.openInstallPermissionSettings(context) }
             return
         }
@@ -753,11 +842,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }.fold(
                 onSuccess = { apk ->
-                    updateStatus.value = "Installation wird gestartet…"
+                    updateStatus.value = ""
+                    updateDialog.value = false
                     runCatching { UpdateChecker.install(context, apk) }
-                        .onFailure { updateStatus.value = "Installation fehlgeschlagen: ${it.message}" }
+                        .onFailure { showMessage("Installation fehlgeschlagen: ${it.message}") }
                 },
-                onFailure = { updateStatus.value = "Download fehlgeschlagen: ${it.message}" }
+                onFailure = {
+                    updateStatus.value = ""
+                    showMessage("Download fehlgeschlagen: ${it.message}")
+                }
             )
             updateInProgress.value = false
         }
@@ -925,16 +1018,40 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         selectedVod.value = item
         vodInfo.value = null
         val api = xtream ?: return
+        vodInfoState.value = ContentState.Loading
         viewModelScope.launch {
             runCatching { withContext(Dispatchers.IO) { api.getVodInfo(item.id) } }
-                .onSuccess { vodInfo.value = it }
+                .fold(
+                    onSuccess = {
+                        // Inzwischen ein anderer Film geöffnet? Dann das Ergebnis verwerfen.
+                        if (selectedVod.value?.id != item.id) return@fold
+                        vodInfo.value = it
+                        vodInfoState.value = ContentState.Ready
+                    },
+                    onFailure = {
+                        if (selectedVod.value?.id != item.id) return@fold
+                        vodInfoState.value = ContentState.Error("Keine Beschreibung verfügbar.")
+                    }
+                )
         }
     }
 
     fun closeVod() {
         selectedVod.value = null
-        // Zurück im Grid: zuletzt fokussiertes Poster wieder fokussieren.
-        pendingVodFocus.value = true
+        // Zurück im Grid bzw. in der Suche: zuletzt geöffneten Titel wieder fokussieren.
+        restoreContentFocus()
+    }
+
+    /** Fokus nach Detailseite/Player in den Bereich zurückgeben, aus dem gestartet wurde. */
+    private fun restoreContentFocus() {
+        when (currentDestination.value) {
+            NavDestination.HOME -> pendingHomeFocus.value = true
+            NavDestination.MOVIES -> pendingVodFocus.value = true
+            NavDestination.SERIES -> pendingSeriesFocus.value = true
+            NavDestination.GUIDE -> pendingGuideFocus.value = true
+            NavDestination.SEARCH -> pendingSearchFocus.value = true
+            else -> pendingListFocus.value = true
+        }
     }
 
     fun openSeries(series: SeriesItem) {
@@ -966,7 +1083,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun closeSeries() {
         selectedSeries.value = null
-        pendingSeriesFocus.value = true
+        restoreContentFocus()
     }
 
     // ---------- Wiedergabe ----------
@@ -993,14 +1110,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         cancelSleepTimer()
         selectedChannel.value = null
         playingMedia.value = null
-        // Fokus dorthin zurückgeben, wo die Wiedergabe gestartet wurde.
-        when (currentDestination.value) {
-            NavDestination.HOME -> pendingHomeFocus.value = true
-            NavDestination.MOVIES -> pendingVodFocus.value = true
-            NavDestination.SERIES -> pendingSeriesFocus.value = true
-            NavDestination.GUIDE -> pendingGuideFocus.value = true
-            else -> pendingListFocus.value = true
-        }
+        // Fokus dorthin zurückgeben, wo die Wiedergabe gestartet wurde (eine offene Detailseite
+        // setzt ihren Fokus selbst).
+        if (selectedVod.value == null && selectedSeries.value == null) restoreContentFocus()
     }
 
     fun saveResume(url: String, positionMs: Long, durationMs: Long = 0L) {
@@ -1071,6 +1183,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             } else {
                 stopPlayback()
                 url.value = ""
+                loadedUrl = null
                 allChannels.value = emptyList()
                 selectedGroup.value = null
                 uiState.value = PlaylistUiState.Idle
@@ -1098,7 +1211,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val updated = epgSources.value + trimmed
         epgSources.value = updated
         viewModelScope.launch { repository.saveEpgSources(updated) }
-        if (refresh) refreshEpg()
+        if (refresh) refreshEpg(notify = true)
     }
 
     fun removeEpgSource(source: String) {
@@ -1107,25 +1220,27 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch { repository.saveEpgSources(updated) }
     }
 
-    fun refreshEpg() {
+    /** EPG neu laden; [notify] = vom Nutzer ausgelöst (Ergebnis dann als Snackbar). */
+    fun refreshEpg(notify: Boolean = false) {
         val sources = epgSources.value
         if (sources.isEmpty()) {
-            epgInfo.value = "Keine EPG-Quellen konfiguriert."
+            if (notify) showMessage("Keine EPG-Quellen konfiguriert.")
             return
         }
         val channels = allChannels.value
         if (channels.isEmpty()) {
-            epgInfo.value = "Zuerst eine Playlist laden."
+            if (notify) showMessage("Zuerst eine Playlist laden.")
             return
         }
-        epgInfo.value = "EPG wird geladen…"
+        epgLoading.value = true
         // Nur ein EPG-Abruf gleichzeitig: ein neuerer ersetzt den laufenden (dessen Ergebnis
         // wird nach dem Abbruch verworfen und kann den neueren Stand nicht überschreiben).
         epgJob?.cancel()
-        epgJob = viewModelScope.launch {
+        val job = viewModelScope.launch {
             val result = withContext(Dispatchers.IO) { EpgFetcher.fetch(channels, sources) }
             setEpg(result.programmes, result.nameToId)
             epgTick.value = System.currentTimeMillis()
+            epgUpdatedAt.value = System.currentTimeMillis()
             repository.saveEpgCache(result.programmes, result.nameToId)
 
             val programmeCount = result.programmes.values.sumOf { it.size }
@@ -1136,10 +1251,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             }
 
             epgInfo.value = buildString {
-                append("EPG: $programmeCount Sendungen für $matchedCount von ${channels.size} Sendern geladen.")
-                if (result.failedSources > 0) append(" ${result.failedSources} Quelle(n) fehlgeschlagen.")
+                append("$programmeCount Sendungen für $matchedCount von ${channels.size} Sendern")
+                if (result.failedSources > 0) append(" · ${result.failedSources} Quelle(n) fehlgeschlagen")
             }
+            if (notify) showMessage("EPG geladen: ${epgInfo.value}.")
         }
+        epgJob = job
+        // Ladeanzeige endet mit dem jüngsten Abruf (ein abgebrochener älterer setzt sie nicht zurück).
+        job.invokeOnCompletion { if (epgJob === job) epgLoading.value = false }
     }
 
     fun clearEpgCache() {
@@ -1147,7 +1266,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             repository.clearEpgCache()
             setEpg(emptyMap(), emptyMap())
             epgTick.value = System.currentTimeMillis()
-            epgInfo.value = "EPG-Cache wurde gelöscht."
+            epgUpdatedAt.value = null
+            epgInfo.value = ""
+            showMessage("EPG-Cache wurde gelöscht.")
         }
     }
 
@@ -1172,11 +1293,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val programmes = epgData[id] ?: return EMPTY_EPG
         // Sendungen sind nach Start sortiert: letzte Sendung mit Start <= jetzt per Binärsuche.
         val index = lastStartingAtOrBefore(programmes, now)
+        val next = programmes.getOrNull(index + 1)
         val current = programmes.getOrNull(index)?.takeIf { now < it.stopMs }
-            ?: return EpgNowNext(null, programmes.getOrNull(index + 1)?.title, null)
+            ?: return EpgNowNext(null, next?.title, null, nextStartMs = next?.startMs)
         val progress = ((now - current.startMs).toFloat() / (current.stopMs - current.startMs))
             .coerceIn(0f, 1f)
-        return EpgNowNext(current.title, programmes.getOrNull(index + 1)?.title, progress)
+        return EpgNowNext(current.title, next?.title, progress, current.startMs, current.stopMs, next?.startMs)
     }
 
     /** Index der letzten Sendung mit startMs <= [now]; -1, wenn alle später beginnen. */
@@ -1209,6 +1331,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         requestLocalNetworkIfNeeded(listOf(target)) { fetchPlaylist(target) }
     }
 
+    // Zuletzt erfolgreich geladene Playlist — beim Neuladen derselben bleiben Filter & Kataloge.
+    private var loadedUrl: String? = null
+
     private fun fetchPlaylist(target: String) {
         viewModelScope.launch {
             val result = withContext(Dispatchers.IO) {
@@ -1222,23 +1347,36 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     if (channels.isEmpty()) {
                         uiState.value = PlaylistUiState.Error("Keine Kanäle in der Playlist gefunden.")
                     } else {
+                        val samePlaylist = target == loadedUrl
+                        loadedUrl = target
                         allChannels.value = channels
-                        selectedGroup.value = null
-                        searchQuery.value = ""
-                        playerOverlayGroup.value = null
-                        lastFocusedIndex = 0
-                        vodFocusIndex = 0
-                        seriesFocusIndex = 0
                         uiState.value = PlaylistUiState.Success
-                        pendingListFocus.value = true
-                        // Filme/Serien der alten Playlist verwerfen; Xtream neu erkennen.
-                        vodItems.value = emptyList()
-                        seriesItems.value = emptyList()
-                        vodState.value = ContentState.Idle
-                        seriesState.value = ContentState.Idle
-                        selectedVodCategory.value = null
-                        selectedSeriesCategory.value = null
-                        setupXtream(target, autoAddEpg = true)
+                        if (samePlaylist) {
+                            // Neu laden (Pull-to-Refresh, „Neu laden“): Kategorie, Position und
+                            // Kataloge bleiben — nur eine verschwundene Kategorie wird gelöst.
+                            val groupsNow = channels.mapNotNull { it.group }.toSet()
+                            selectedGroup.value?.let { if (it != FAVORITES_GROUP && it !in groupsNow) selectedGroup.value = null }
+                            playerOverlayGroup.value?.let { if (it != FAVORITES_GROUP && it !in groupsNow) playerOverlayGroup.value = null }
+                            refreshAccountInfo()
+                        } else {
+                            selectedGroup.value = null
+                            searchQuery.value = ""
+                            playerOverlayGroup.value = null
+                            lastFocusedIndex = 0
+                            vodFocusIndex = 0
+                            seriesFocusIndex = 0
+                            vodScroll = 0 to 0
+                            seriesScroll = 0 to 0
+                            pendingListFocus.value = true
+                            // Filme/Serien der alten Playlist verwerfen; Xtream neu erkennen.
+                            vodItems.value = emptyList()
+                            seriesItems.value = emptyList()
+                            vodState.value = ContentState.Idle
+                            seriesState.value = ContentState.Idle
+                            selectedVodCategory.value = null
+                            selectedSeriesCategory.value = null
+                            setupXtream(target, autoAddEpg = true)
+                        }
                         repository.saveUrl(target)
                         repository.saveChannels(channels)
                         refreshEpg()
@@ -1274,9 +1412,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** Sender zu einer festen Nummer (Position unter "Alle", 1-basiert); null = gibt es nicht. */
+    fun channelForNumber(number: Int): Channel? = channelsForGroup(null).getOrNull(number - 1)
+
     /** Direktwahl per Zifferntasten: feste Nummer = Position unter "Alle" (1-basiert). */
     fun jumpToChannelNumber(number: Int): Boolean {
-        val channel = channelsForGroup(null).getOrNull(number - 1) ?: return false
+        val channel = channelForNumber(number) ?: return false
         startChannel(channel)
         return true
     }
@@ -1347,8 +1488,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun exportBackup(target: Uri? = null) {
         viewModelScope.launch {
             runCatching { repository.exportBackup(target) }.fold(
-                onSuccess = { backupInfo.value = "Backup gespeichert: $it" },
-                onFailure = { backupInfo.value = "Backup fehlgeschlagen: ${it.message}" }
+                onSuccess = { showMessage("Backup gespeichert: $it") },
+                onFailure = { showMessage("Backup fehlgeschlagen: ${it.message}") }
             )
         }
     }
@@ -1356,7 +1497,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun importBackup(source: Uri? = null) {
         // Import würde ausgeblendete Kategorien überschreiben — nur ohne aktive Sperre.
         if (parentalLocked) {
-            backupInfo.value = "Import gesperrt — zuerst die Jugendschutz-PIN eingeben."
+            showMessage("Import gesperrt — zuerst die Jugendschutz-PIN eingeben.")
             return
         }
         viewModelScope.launch {
@@ -1374,10 +1515,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     playlists.value = repository.playlistsFlow.first()
                     xtreamLinks.value = repository.xtreamLinksFlow.first()
                     xtreamDismissed.value = repository.xtreamDismissedFlow.first()
-                    backupInfo.value = "Backup importiert — Playlist wird geladen…"
+                    loadedUrl = null // importierte Playlist komplett neu aufbauen
+                    showMessage("Backup „$it“ importiert — Playlist wird geladen…")
                     if (url.value.isNotBlank()) loadPlaylist()
                 },
-                onFailure = { backupInfo.value = "Import fehlgeschlagen: ${it.message}" }
+                onFailure = { showMessage("Import fehlgeschlagen: ${it.message}") }
             )
         }
     }

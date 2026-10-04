@@ -116,6 +116,24 @@ class MainActivity : ComponentActivity() {
                 updateAutoEnterPip(playing && !isTv)
             }
 
+            // Fensterhintergrund passend zum Design (Übergänge, Rotation) und — ab Android 13 — der
+            // Startbildschirm beim nächsten Öffnen, damit im hellen Design nichts dunkel aufblitzt.
+            LaunchedEffect(themeMode, darkTheme) {
+                val background = if (darkTheme) R.color.window_dark else R.color.window_light
+                window.setBackgroundDrawableResource(background)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    runCatching {
+                        splashScreen.setSplashScreenTheme(
+                            when (themeMode) {
+                                "light" -> R.style.Theme_Iptv_Light
+                                "system" -> R.style.Theme_Iptv_System
+                                else -> R.style.Theme_Iptv
+                            }
+                        )
+                    }
+                }
+            }
+
             CompositionLocalProvider(
                 LocalIsTv provides isTv,
                 LocalInPictureInPicture provides inPictureInPicture.value
@@ -240,6 +258,9 @@ fun IptvApp(mainViewModel: MainViewModel = viewModel()) {
                             onCycleResize = { mainViewModel.cycleResizeMode() },
                             onJumpToNumber = if (it.isLive) {
                                 { number -> mainViewModel.jumpToChannelNumber(number) }
+                            } else null,
+                            channelNameForNumber = if (it.isLive) {
+                                { number -> mainViewModel.channelForNumber(number)?.name }
                             } else null,
                             onBack = { mainViewModel.stopPlayback() },
                             onZap = if (it.isLive) {

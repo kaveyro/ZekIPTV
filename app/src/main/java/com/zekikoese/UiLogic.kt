@@ -2,7 +2,10 @@ package com.zekikoese
 
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
+import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
+import java.util.TimeZone
 
 /** Ladezustand eines Anbieter-Katalogs (Filme, Serien, Episoden). */
 sealed interface ContentState {
@@ -153,3 +156,69 @@ internal fun guideWindowFor(
     }
     return target.coerceIn(rangeStart, (rangeEnd - spanMs).coerceAtLeast(rangeStart))
 }
+
+// ---------- Player ----------
+
+/** Wirkung der Zurück-Taste im Player — Schritt für Schritt statt sofort zu beenden. */
+internal enum class PlayerBackAction { CLEAR_NUMBER, HIDE_CONTROLS, EXIT }
+
+/**
+ * Zurück im Player: erst eine angefangene Sender-Direktwahl verwerfen, dann (TV) die sichtbare
+ * Steuerleiste ausblenden, erst danach den Player verlassen — so geht z. B. der Timeshift-Puffer
+ * nicht durch einen einzigen Tastendruck verloren. Auf dem Handy beendet Zurück direkt (dort
+ * ist die Steuerleiste fast immer sichtbar und hat einen eigenen Zurück-Knopf).
+ */
+internal fun playerBackAction(numberEntry: Boolean, controlsVisible: Boolean, isTv: Boolean): PlayerBackAction =
+    when {
+        numberEntry -> PlayerBackAction.CLEAR_NUMBER
+        isTv && controlsVisible -> PlayerBackAction.HIDE_CONTROLS
+        else -> PlayerBackAction.EXIT
+    }
+
+/** Uhrzeit (HH:mm) in der Zeitzone des Geräts. */
+internal fun clockLabel(ms: Long): String = SimpleDateFormat("HH:mm", Locale.GERMANY).format(Date(ms))
+
+/** Restzeit kurz und lesbar: „noch 38 min“ bzw. „noch 1:12 h“. */
+internal fun remainingLabel(remainingMs: Long): String {
+    val minutes = ((remainingMs + 59_999) / 60_000).coerceAtLeast(1)
+    return if (minutes < 60) "noch $minutes min" else "noch %d:%02d h".format(minutes / 60, minutes % 60)
+}
+
+/** Zeitfenster der laufenden Sendung mit Restzeit, z. B. „20:15–21:45 · noch 38 min“. */
+internal fun programmeTimesLabel(startMs: Long, stopMs: Long, now: Long): String =
+    "${clockLabel(startMs)}–${clockLabel(stopMs)} · ${remainingLabel(stopMs - now)}"
+
+// ---------- Listen ----------
+
+/**
+ * Eindeutige, stabile Keys für Senderlisten. Die URL allein reicht nicht — derselbe Stream
+ * steht oft mehrfach in einer Playlist. Die laufende Nummer zählt daher nur Wiederholungen
+ * derselben URL; Einfügungen anderer Sender verschieben den Key nicht.
+ */
+internal fun stableChannelKeys(channels: List<Channel>): List<String> {
+    val seen = HashMap<String, Int>(channels.size * 2)
+    return channels.map { channel ->
+        val n = seen.merge(channel.url, 1, Int::plus) ?: 1
+        if (n == 1) channel.url else "${channel.url}#$n"
+    }
+}
+
+// ---------- Einstellungen ----------
+
+/** Stand des Programmführers, z. B. „heute 06:12“, „gestern 22:40“ oder „01.10. 06:12“. */
+internal fun epgUpdatedLabel(savedMs: Long, now: Long): String {
+    val zone = TimeZone.getDefault()
+    val dayDiff = Math.floorDiv(now + zone.getOffset(now), DAY_MS) - Math.floorDiv(savedMs + zone.getOffset(savedMs), DAY_MS)
+    val time = clockLabel(savedMs)
+    return when (dayDiff) {
+        0L -> "heute $time"
+        1L -> "gestern $time"
+        else -> SimpleDateFormat("dd.MM.", Locale.GERMANY).format(Date(savedMs)) + " $time"
+    }
+}
+
+/** Vorgeschlagener Dateiname beim Export, mit Datum — mehrere Sicherungen bleiben unterscheidbar. */
+internal fun backupFileName(now: Long): String =
+    "zekiptv-backup-" + SimpleDateFormat("yyyy-MM-dd", Locale.ROOT).format(Date(now)) + ".json"
+
+private const val DAY_MS = 24L * 60 * 60 * 1000
